@@ -1,0 +1,14 @@
+[package]
+name = "yrs-ws"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lib0 = "0.11"
+yrs = "0.11"
+warp = "0.3"
+thiserror = "1.0"
+futures-util = "0.3"
+tokio = { version = "1.20", features = ["full"] }

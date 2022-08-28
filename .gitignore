@@ -1,0 +1,5 @@
+/.idea
+/target
+/Cargo.lock/
+/examples/code-mirror/frontend/node_modules
+/examples/code-mirror/frontend/dist
