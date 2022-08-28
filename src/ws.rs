@@ -69,7 +69,6 @@ const MSG_QUERY_AWARENESS: u8 = 3;
 const PERMISSION_DENIED: u8 = 0;
 
 async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<Message>, Error> {
-    println!("incoming message: {:?}", msg);
     match msg {
         Message::Sync(msg) => match msg {
             sync::Message::SyncStep1(sv) => {

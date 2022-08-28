@@ -21,8 +21,9 @@ export const usercolors = [
 export const userColor = usercolors[random.uint32() % usercolors.length]
 
 const doc = new Y.Doc()
-const provider = new WebsocketProvider('ws://localhost:8000', 'my-room', doc)
 const ytext = doc.getText('codemirror')
+
+const provider = new WebsocketProvider('ws://localhost:8000', 'my-room', doc)
 
 const undoManager = new Y.UndoManager(ytext)
 
@@ -32,13 +33,14 @@ provider.awareness.setLocalStateField('user', {
     colorLight: userColor.light
 })
 
+
+
 const state = EditorState.create({
     doc: ytext.toString(),
     extensions: [
-        basicSetup,
         javascript(),
         yCollab(ytext, provider.awareness, { undoManager })
     ]
 })
 
-const view = new EditorView({ state, parent: /** @type {HTMLElement} */ (document.querySelector('#editor')) })
+const view = new EditorView({ state, parent: document.querySelector('#editor') })
