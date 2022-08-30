@@ -32,10 +32,11 @@ const MSG_SYNC_STEP_1: u8 = 0;
 const MSG_SYNC_STEP_2: u8 = 1;
 const MSG_SYNC_UPDATE: u8 = 2;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Message {
     SyncStep1(StateVector),
     SyncStep2(Vec<u8>),
+    Update(Vec<u8>),
 }
 
 impl Encode for Message {
@@ -47,6 +48,10 @@ impl Encode for Message {
             }
             Message::SyncStep2(u) => {
                 encoder.write_var(MSG_SYNC_STEP_2);
+                encoder.write_buf(u);
+            }
+            Message::Update(u) => {
+                encoder.write_var(MSG_SYNC_UPDATE);
                 encoder.write_buf(u);
             }
         }
@@ -62,9 +67,13 @@ impl Decode for Message {
                 let sv = StateVector::decode_v1(buf)?;
                 Ok(Message::SyncStep1(sv))
             }
-            MSG_SYNC_STEP_2 | MSG_SYNC_UPDATE => {
+            MSG_SYNC_STEP_2 => {
                 let buf = decoder.read_buf()?;
                 Ok(Message::SyncStep2(buf.into()))
+            }
+            MSG_SYNC_UPDATE => {
+                let buf = decoder.read_buf()?;
+                Ok(Message::Update(buf.into()))
             }
             _ => Err(Error::UnexpectedValue),
         }

@@ -229,7 +229,7 @@ impl Default for Awareness {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AwarenessUpdate {
     clients: HashMap<ClientID, AwarenessUpdateEntry>,
 }
@@ -268,7 +268,7 @@ impl Decode for AwarenessUpdate {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub struct AwarenessUpdateEntry {
     clock: u32,
     json: String,

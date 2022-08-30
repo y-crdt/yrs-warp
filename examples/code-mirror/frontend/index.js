@@ -3,6 +3,7 @@ import { yCollab } from 'y-codemirror.next'
 import { EditorView, basicSetup } from "codemirror";
 import { EditorState } from "@codemirror/state";
 import { javascript } from '@codemirror/lang-javascript'
+import {syntaxHighlighting, defaultHighlightStyle} from "@codemirror/language"
 import * as random from 'lib0/random'
 import {WebsocketProvider} from "y-websocket";
 
@@ -39,6 +40,7 @@ const state = EditorState.create({
     doc: ytext.toString(),
     extensions: [
         javascript(),
+        syntaxHighlighting(defaultHighlightStyle),
         yCollab(ytext, provider.awareness, { undoManager })
     ]
 })

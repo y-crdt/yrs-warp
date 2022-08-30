@@ -2,6 +2,7 @@ use crate::awareness::{Awareness, AwarenessUpdate};
 use crate::{awareness, sync};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
+use lib0::decoding::Cursor;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -10,7 +11,7 @@ use tokio::spawn;
 use tokio::sync::RwLock;
 use tokio::task::{JoinError, JoinHandle};
 use warp::ws::WebSocket;
-use yrs::updates::decoder::{Decode, Decoder};
+use yrs::updates::decoder::{Decode, Decoder, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder};
 use yrs::Update;
 
@@ -22,11 +23,16 @@ impl WarpConn {
     pub fn new(awareness: Arc<RwLock<Awareness>>, ws: WebSocket) -> Self {
         let (mut sink, mut source) = ws.split();
         let processing_loop = spawn(async move {
+            // at the beginning send SyncStep1 and AwarenessUpdate
+            if let Err(e) = Self::init(&awareness, &mut sink).await {
+                return Err(e);
+            }
+
             while let Some(input) = source.next().await {
                 match Self::process(&awareness, &mut sink, input).await {
                     Ok(()) => { /* continue */ }
-                    error => {
-                        return error;
+                    ret => {
+                        return ret;
                     }
                 }
             }
@@ -35,16 +41,46 @@ impl WarpConn {
         WarpConn { processing_loop }
     }
 
+    async fn init(
+        awareness: &Arc<RwLock<Awareness>>,
+        sink: &mut SplitSink<WebSocket, warp::ws::Message>,
+    ) -> Result<(), Error> {
+        let (sv, update) = {
+            let awareness = awareness.read().await;
+            let sv = awareness.doc().transact().state_vector();
+            let update = awareness.update()?;
+            (sv, update)
+        };
+        let msg = Message::Sync(sync::Message::SyncStep1(sv));
+        sink.send(warp::ws::Message::binary(msg.encode_v1()))
+            .await?;
+        let msg = Message::Awareness(update);
+        sink.send(warp::ws::Message::binary(msg.encode_v1()))
+            .await?;
+        Ok(())
+    }
+
     async fn process(
         awareness: &Arc<RwLock<Awareness>>,
         sink: &mut SplitSink<WebSocket, warp::ws::Message>,
         input: Result<warp::ws::Message, warp::Error>,
     ) -> Result<(), Error> {
-        let msg = Message::decode_v1(input?.as_bytes())?;
-        if let Some(reply) = handle_msg(&awareness, msg).await? {
-            sink.send(warp::ws::Message::binary(reply.encode_v1()))
-                .await?;
-        }
+        let input = input?;
+        let mut decoder = DecoderV1::new(Cursor::new(input.as_bytes()));
+        while {
+            // it's possible that input WS message aggregates more than one y-protocol message
+            match Message::decode(&mut decoder) {
+                Ok(msg) => {
+                    if let Some(reply) = handle_msg(&awareness, msg).await? {
+                        sink.send(warp::ws::Message::binary(reply.encode_v1()))
+                            .await?;
+                    }
+                    true
+                }
+                Err(lib0::error::Error::EndOfBuffer) => false,
+                Err(error) => return Err(Error::DecodingError(error)),
+            }
+        } {}
         Ok(())
     }
 }
@@ -76,7 +112,7 @@ async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<M
                 let update = awareness.doc().encode_state_as_update_v1(&sv);
                 Ok(Some(Message::Sync(sync::Message::SyncStep2(update))))
             }
-            sync::Message::SyncStep2(update) => {
+            sync::Message::SyncStep2(update) | sync::Message::Update(update) => {
                 let awareness = a.write().await;
                 let mut txn = awareness.doc().transact();
                 let update = Update::decode_v1(&update)?;
@@ -104,7 +140,7 @@ async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<M
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 pub enum Message {
     Sync(sync::Message),
     Auth(Option<String>),
@@ -114,7 +150,6 @@ pub enum Message {
 
 impl Encode for Message {
     fn encode<E: Encoder>(&self, encoder: &mut E) {
-        encoder.write_var(MSG_SYNC);
         match self {
             Message::Sync(msg) => {
                 encoder.write_var(MSG_SYNC);
@@ -134,7 +169,7 @@ impl Encode for Message {
             }
             Message::Awareness(update) => {
                 encoder.write_var(MSG_AWARENESS);
-                encoder.write_all(&update.encode_v1())
+                encoder.write_buf(&update.encode_v1())
             }
         }
     }
@@ -169,20 +204,60 @@ impl Decode for Message {
 
 #[derive(Debug, Error)]
 pub enum Error {
-    #[error("failed to deserialize message")]
+    #[error("failed to deserialize message: {0}")]
     DecodingError(#[from] lib0::error::Error),
-    #[error("failed to process awareness update")]
+    #[error("failed to process awareness update: {0}")]
     AwarenessEncoding(#[from] awareness::Error),
     #[error("permission denied to access.\n{reason:?}")]
     PermissionDenied { reason: String },
-    #[error("tokio runtime join handle error occurred")]
+    #[error("tokio runtime join handle error occurred, {0}")]
     Schedule(#[from] JoinError),
-    #[error("internal failure")]
+    #[error("internal failure: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl From<warp::Error> for Error {
     fn from(e: warp::Error) -> Self {
         Error::Other(e.into())
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::awareness::Awareness;
+    use crate::sync;
+    use crate::ws::Message;
+    use yrs::updates::decoder::Decode;
+    use yrs::updates::encoder::Encode;
+    use yrs::{Doc, StateVector};
+
+    #[test]
+    fn message_encoding() {
+        let doc = Doc::new();
+        let txt = doc.transact().get_text("text");
+        txt.push(&mut doc.transact(), "hello world");
+        let mut awareness = Awareness::new(doc);
+        awareness.set_local_state("{\"user\":{\"name\":\"Anonymous 50\",\"color\":\"#30bced\",\"colorLight\":\"#30bced33\"}}");
+
+        let messages = [
+            Message::Sync(sync::Message::SyncStep1(
+                awareness.doc().transact().state_vector(),
+            )),
+            Message::Sync(sync::Message::SyncStep2(
+                awareness
+                    .doc()
+                    .encode_state_as_update_v1(&StateVector::default()),
+            )),
+            Message::Awareness(awareness.update().unwrap()),
+            Message::Auth(Some("reason".to_string())),
+            Message::AwarenessQuery,
+        ];
+
+        for msg in messages {
+            let encoded = msg.encode_v1();
+            let decoded =
+                Message::decode_v1(&encoded).expect(&format!("failed to decode {:?}", msg));
+            assert_eq!(decoded, msg);
+        }
     }
 }

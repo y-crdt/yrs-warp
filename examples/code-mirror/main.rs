@@ -13,7 +13,21 @@ const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
 #[tokio::main]
 async fn main() {
     // We're using a single static document shared among all the peers.
-    let awareness: AwarenessRef = Arc::new(RwLock::new(Awareness::new(Doc::new())));
+    let awareness: AwarenessRef = {
+        let doc = Doc::new();
+        {
+            // pre-initialize code mirror document with some text
+            let mut txn = doc.transact();
+            let txt = txn.get_text("codemirror");
+            txt.push(
+                &mut txn,
+                r#"function hello() {
+  console.log('hello world');
+}"#,
+            );
+        }
+        Arc::new(RwLock::new(Awareness::new(doc)))
+    };
 
     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
 
