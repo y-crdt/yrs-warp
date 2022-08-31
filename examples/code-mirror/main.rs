@@ -3,8 +3,8 @@ use tokio::sync::RwLock;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use yrs::Doc;
-use yrs_ws::awareness::Awareness;
-use yrs_ws::ws::WarpConn;
+use yrs_warp::awareness::Awareness;
+use yrs_warp::ws::WarpConn;
 
 type AwarenessRef = Arc<RwLock<Awareness>>;
 
