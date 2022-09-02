@@ -35,7 +35,7 @@ use yrs::Update;
 ///     Ok(ws.on_upgrade(move |socket| async {
 ///         let conn = WarpConn::new(awareness, socket);
 ///         if let Err(e) = conn.await {
-///             eprintln!("connection finished abruptly because of {}", e);
+///             eprintln!("connection finished abruptly because of '{}'", e);
 ///         }
 ///     }))
 /// }
@@ -255,7 +255,7 @@ pub enum Error {
     AwarenessEncoding(#[from] awareness::Error),
 
     /// An incoming Y-protocol authorization request has been denied.
-    #[error("permission denied to access.\n{reason:?}")]
+    #[error("permission denied to access: {reason}")]
     PermissionDenied { reason: String },
 
     /// Awaiting for scheduled a [WarpConn] execution caused tokio runtime to fail.
