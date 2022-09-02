@@ -15,11 +15,52 @@ use yrs::updates::decoder::{Decode, Decoder, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder};
 use yrs::Update;
 
+/// Connection Wrapper over a [WebSocket], which implements a Yjs/Yrs awareness and update exchange
+/// protocol.
+///
+/// This connection implements Future pattern and can be awaited upon in order for a caller to
+/// recognize whether underlying websocket connection has been finished gracefully or abruptly.
+///
+/// Examples:
+/// ```rust
+/// use std::sync::Arc;
+/// use tokio::sync::RwLock;
+/// use warp::{Filter,Reply,Rejection};
+/// use warp::ws::{WebSocket,Ws};
+/// use yrs::Doc;
+/// use yrs_warp::awareness::Awareness;
+/// use yrs_warp::ws::WarpConn;
+///
+/// async fn handle(ws: Ws, awareness: Arc<RwLock<Awareness>>) -> Result<impl Reply, Rejection> {
+///     Ok(ws.on_upgrade(move |socket| async {
+///         let conn = WarpConn::new(awareness, socket);
+///         if let Err(e) = conn.await {
+///             eprintln!("connection finished abruptly because of {}", e);
+///         }
+///     }))
+/// }
+///
+/// fn server() {
+///    // We're using a single static document shared among all the peers.
+///    let awareness = Arc::new(RwLock::new(Awareness::new(Doc::new())));
+///
+///    let ws = warp::path("my-room")
+///         .and(warp::ws())
+///         .and_then(move |ws: Ws| handle(ws, awareness.clone()));
+///     // warp::serve(ws).run(([0, 0, 0, 0], 8000)).await;
+/// }
+/// ```
 pub struct WarpConn {
     processing_loop: JoinHandle<Result<(), Error>>,
 }
 
 impl WarpConn {
+    /// Wraps incoming [WebSocket] connection and supplied [Awareness] accessor into a new
+    /// connection handler capable of exchanging Yrs/Yjs messages.
+    ///
+    /// While creation of new [WarpConn] always succeeds, a connection itself can possibly fail
+    /// while processing incoming input/output. This can be detected by awaiting for returned
+    /// [WarpConn] and handling the awaited result.
     pub fn new(awareness: Arc<RwLock<Awareness>>, ws: WebSocket) -> Self {
         let (mut sink, mut source) = ws.split();
         let processing_loop = spawn(async move {
@@ -141,7 +182,7 @@ async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<M
 }
 
 #[derive(Debug, Eq, PartialEq)]
-pub enum Message {
+enum Message {
     Sync(sync::Message),
     Auth(Option<String>),
     AwarenessQuery,
@@ -202,16 +243,26 @@ impl Decode for Message {
     }
 }
 
+/// An error type returned in responde for awaiting for [WarpConn] to complete.
 #[derive(Debug, Error)]
 pub enum Error {
+    /// Incoming Y-protocol message couldn't be deserialized.
     #[error("failed to deserialize message: {0}")]
     DecodingError(#[from] lib0::error::Error),
+
+    /// Applying incoming Y-protocol awareness update has failed.
     #[error("failed to process awareness update: {0}")]
     AwarenessEncoding(#[from] awareness::Error),
+
+    /// An incoming Y-protocol authorization request has been denied.
     #[error("permission denied to access.\n{reason:?}")]
     PermissionDenied { reason: String },
+
+    /// Awaiting for scheduled a [WarpConn] execution caused tokio runtime to fail.
     #[error("tokio runtime join handle error occurred, {0}")]
     Schedule(#[from] JoinError),
+
+    /// Custom dynamic kind of error, usually related to a warp internal error messages.
     #[error("internal failure: {0}")]
     Other(#[from] Box<dyn std::error::Error + Send + Sync>),
 }

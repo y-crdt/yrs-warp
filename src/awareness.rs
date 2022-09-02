@@ -12,24 +12,18 @@ pub const OUTDATED_TIMEOUT: Duration = Duration::from_millis(3000);
 
 const NULL_STR: &str = "null";
 
-/**
- * The Awareness class implements a simple shared state protocol that can be used for non-persistent data like awareness information
- * (cursor, username, status, ..). Each client can update its own local state and listen to state changes of
- * remote clients. Every client may set a state of a remote peer to `null` to mark the client as offline.
- *
- * Each client is identified by a unique client id (something we borrow from `doc.clientID`). A client can override
- * its own state by propagating a message with an increasing timestamp (`clock`). If such a message is received, it is
- * applied if the known state of that client is older than the new state (`clock < newClock`). If a client thinks that
- * a remote client is offline, it may propagate a message with
- * `{ clock: currentClientClock, state: null, client: remoteClient }`. If such a
- * message is received, and the known clock of that client equals the received clock, it will override the state with `null`.
- *
- * Before a client disconnects, it should propagate a `null` state with an updated clock.
- *
- * Awareness states must be updated every 30 seconds. Otherwise the Awareness instance will delete the client state.
- *
- * @extends {Observable<string>}
- */
+/// The Awareness class implements a simple shared state protocol that can be used for non-persistent
+/// data like awareness information (cursor, username, status, ..). Each client can update its own
+/// local state and listen to state changes of remote clients.
+///
+/// Each client is identified by a unique client id (something we borrow from `doc.clientID`).
+/// A client can override its own state by propagating a message with an increasing timestamp
+/// (`clock`). If such a message is received, it is applied if the known state of that client is
+/// older than the new state (`clock < new_clock`). If a client thinks that a remote client is
+/// offline, it may propagate a message with `{ clock, state: null, client }`. If such a message is
+/// received, and the known clock of that client equals the received clock, it will clean the state.
+///
+/// Before a client disconnects, it should propagate a `null` state with an updated clock.
 pub struct Awareness {
     doc: Doc,
     states: HashMap<ClientID, String>,
@@ -41,6 +35,9 @@ unsafe impl Send for Awareness {}
 unsafe impl Sync for Awareness {}
 
 impl Awareness {
+    /// Creates a new instance of [Awareness] struct, which operates over a given document.
+    /// Awareness instance has full ownership of that document. If necessary it can be accessed
+    /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
     pub fn new(doc: Doc) -> Self {
         Awareness {
             doc,
@@ -50,6 +47,12 @@ impl Awareness {
         }
     }
 
+    /// Creates a new instance of [Awareness] struct, which operates over a given document.
+    /// Awareness instance has full ownership of that document. If necessary it can be accessed
+    /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
+    ///
+    /// This method accepts a sender channel, that is used to propagate any update events about
+    /// client changes detected as a result of modifying the awareness state.
     pub fn with_observer(doc: Doc, on_update: Sender<Event>) -> Self {
         Awareness {
             doc,
@@ -59,26 +62,41 @@ impl Awareness {
         }
     }
 
+    /// Returns a read-only reference to an underlying [Doc].
     pub fn doc(&self) -> &Doc {
         &self.doc
     }
 
+    /// Returns a read-write reference to an underlying [Doc].
+    pub fn doc_mut(&mut self) -> &mut Doc {
+        &mut self.doc
+    }
+
+    /// Returns a globally unique client ID of an underlying [Doc].
     pub fn client_id(&self) -> ClientID {
         self.doc.client_id
     }
 
-    pub fn states(&self) -> &HashMap<ClientID, String> {
+    /// Returns a state map of all of the clients tracked by current [Awareness] instance. Those
+    /// states are identified by their corresponding [ClientID]s. The associated state is
+    /// represented and replicated to other clients as a JSON string.
+    pub fn clients(&self) -> &HashMap<ClientID, String> {
         &self.states
     }
 
+    /// Returns a JSON string state representation of a current [Awareness] instance.
     pub fn local_state(&self) -> Option<&str> {
         Some(self.states.get(&self.doc.client_id)?.as_str())
     }
 
-    pub fn set_local_state<S: Into<String>>(&mut self, state: S) {
+    /// Sets a current [Awareness] instance state to a corresponding JSON string. This state will
+    /// be replicated to other clients as part of the [AwarenessUpdate] and it will trigger an event
+    /// to be emitted if current instance was created using [Awareness::with_observer] method.
+    ///
+    pub fn set_local_state<S: Into<String>>(&mut self, json: S) {
         let client_id = self.doc.client_id;
         self.update_meta(client_id);
-        let new: String = state.into();
+        let new: String = json.into();
         match self.states.entry(client_id) {
             Entry::Occupied(mut e) => {
                 e.insert(new);
@@ -92,9 +110,10 @@ impl Awareness {
                     let _ = sender.send(Event::new(vec![client_id], vec![], vec![]));
                 }
             }
-        };
+        }
     }
 
+    /// Clears out a state of a given client, effectively marking it as disconnected.
     pub fn remove_state(&mut self, client_id: ClientID) {
         let prev_state = self.states.remove(&client_id);
         self.update_meta(client_id);
@@ -105,6 +124,8 @@ impl Awareness {
         }
     }
 
+    /// Clears out a state of a current client (see: [Awareness::client_id]),
+    /// effectively marking it as disconnected.
     pub fn clean_local_state(&mut self) {
         let client_id = self.doc.client_id;
         self.remove_state(client_id);
@@ -123,11 +144,16 @@ impl Awareness {
         }
     }
 
+    /// Returns a serializable update object which is representation of a current Awareness state.
     pub fn update(&self) -> Result<AwarenessUpdate, Error> {
         let clients = self.states.keys().cloned();
         self.update_with_clients(clients)
     }
 
+    /// Returns a serializable update object which is representation of a current Awareness state.
+    /// Unlike [Awareness::update], this method variant allows to prepare update only for a subset
+    /// of known clients. These clients must all be known to a current [Awareness] instance,
+    /// otherwise a [Error::ClientNotFound] error will be returned.
     pub fn update_with_clients<I: IntoIterator<Item = ClientID>>(
         &self,
         clients: I,
@@ -149,6 +175,11 @@ impl Awareness {
         Ok(AwarenessUpdate { clients: res })
     }
 
+    /// Applies an update (incoming from remote channel or generated using [Awareness::update] /
+    /// [Awareness::update_with_clients] methods) and modifies a state of a current instance.
+    ///
+    /// If current instance has an observer channel (see: [Awareness::with_observer]), applied
+    /// changes will also be emitted as events.
     pub fn apply_update(&mut self, update: AwarenessUpdate) -> Result<(), Error> {
         let now = Instant::now();
 
@@ -229,17 +260,10 @@ impl Default for Awareness {
     }
 }
 
+/// A structure that represents an encodable state of an [Awareness] struct.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AwarenessUpdate {
     clients: HashMap<ClientID, AwarenessUpdateEntry>,
-}
-
-impl AwarenessUpdate {
-    pub fn new() -> Self {
-        AwarenessUpdate {
-            clients: HashMap::new(),
-        }
-    }
 }
 
 impl Encode for AwarenessUpdate {
@@ -268,18 +292,20 @@ impl Decode for AwarenessUpdate {
     }
 }
 
+/// A single client entry of an [AwarenessUpdate]. It consists of logical clock and JSON client
+/// state represented as a string.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AwarenessUpdateEntry {
     clock: u32,
     json: String,
 }
 
+/// Errors generated by an [Awareness] struct methods.
 #[derive(Error, Debug)]
 pub enum Error {
+    /// Client ID was not found in [Awareness] metadata.
     #[error("client ID `{0}` not found")]
     ClientNotFound(ClientID),
-    #[error("failed to deserialize awareness update")]
-    DeserializationError(#[from] lib0::error::Error),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -297,6 +323,7 @@ impl MetaClientState {
     }
 }
 
+/// Event type emitted by an [Awareness] struct.
 #[derive(Debug, Default, Clone, Eq, PartialEq)]
 pub struct Event {
     added: Vec<ClientID>,
@@ -313,22 +340,22 @@ impl Event {
         }
     }
 
+    /// Collection of new clients that have been added to an [Awareness] struct, that was not known
+    /// before. Actual client state can be accessed via `awareness.clients().get(client_id)`.
     pub fn added(&self) -> &[ClientID] {
         &self.added
     }
 
+    /// Collection of new clients that have been updated within an [Awareness] struct since the last
+    /// update. Actual client state can be accessed via `awareness.clients().get(client_id)`.
     pub fn updated(&self) -> &[ClientID] {
         &self.updated
     }
 
+    /// Collection of new clients that have been removed from [Awareness] struct since the last
+    /// update.
     pub fn removed(&self) -> &[ClientID] {
         &self.removed
-    }
-
-    fn clear(&mut self) {
-        self.added.clear();
-        self.updated.clear();
-        self.removed.clear();
     }
 }
 
@@ -359,14 +386,14 @@ mod test {
 
         local.set_local_state("{x:3}");
         let mut e_local = update(&mut o_local, &local, &mut remote)?;
-        assert_eq!(remote.states()[&1], "{x:3}");
+        assert_eq!(remote.clients()[&1], "{x:3}");
         assert_eq!(remote.meta[&1].clock, 1);
         assert_eq!(o_remote.try_recv()?.added, &[1]);
 
         local.set_local_state("{x:4}");
         e_local = update(&mut o_local, &local, &mut remote)?;
         let e_remote = o_remote.try_recv()?;
-        assert_eq!(remote.states()[&1], "{x:4}");
+        assert_eq!(remote.clients()[&1], "{x:4}");
         assert_eq!(e_remote, Event::new(vec![], vec![1], vec![]));
         assert_eq!(e_remote, e_local);
 
@@ -374,7 +401,7 @@ mod test {
         e_local = update(&mut o_local, &local, &mut remote)?;
         let e_remote = o_remote.try_recv()?;
         assert_eq!(e_remote.removed.len(), 1);
-        assert_eq!(local.states().get(&1), None);
+        assert_eq!(local.clients().get(&1), None);
         assert_eq!(e_remote, e_local);
         Ok(())
     }
