@@ -2,6 +2,13 @@
 name = "yrs-warp"
 version = "0.1.0"
 edition = "2021"
+description = "Yrs synchronization protocol using Warp web sockets"
+license = "MIT"
+authors = ["Bartosz Sypytkowski <b.sypytkowski@gmail.com>"]
+keywords = ["crdt", "yrs", "warp"]
+homepage = "https://github.com/y-crdt/yrs-warp/"
+repository = "https://github.com/y-crdt/yrs-warp/"
+readme = "./README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
