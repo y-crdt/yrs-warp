@@ -438,13 +438,13 @@ mod test {
     fn awareness() -> Result<(), Box<dyn std::error::Error>> {
         let (s1, mut o_local) = channel(1);
         let mut local = Awareness::new(Doc::with_client_id(1));
-        let sub_local = local.on_update(move |_, e| {
+        let _sub_local = local.on_update(move |_, e| {
             s1.send(e.clone()).unwrap();
         });
 
         let (s2, mut o_remote) = channel(1);
         let mut remote = Awareness::new(Doc::with_client_id(2));
-        let sub_remote = local.on_update(move |_, e| {
+        let _sub_remote = local.on_update(move |_, e| {
             s2.send(e.clone()).unwrap();
         });
 

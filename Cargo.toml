@@ -1,6 +1,6 @@
 [package]
 name = "yrs-warp"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Yrs synchronization protocol using Warp web sockets"
 license = "MIT"
@@ -13,8 +13,8 @@ readme = "./README.md"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-lib0 = "0.11"
-yrs = "0.11"
+lib0 = "0.12"
+yrs = "0.12"
 warp = "0.3"
 thiserror = "1.0"
 futures-util = "0.3"

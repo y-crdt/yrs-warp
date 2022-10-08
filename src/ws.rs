@@ -133,7 +133,7 @@ impl WarpConn {
                     }
                     true
                 }
-                Err(lib0::error::Error::EndOfBuffer) => false,
+                Err(lib0::error::Error::EndOfBuffer(_)) => false,
                 Err(error) => return Err(Error::DecodingError(error)),
             }
         } {}

@@ -398,9 +398,9 @@ dependencies = [
 
 [[package]]
 name = "lib0"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cb83a90e2a0beb4a6c5ffd6ddc24afab7b1340f5615d6050987f311e850724e2"
+checksum = "db088f7d98d549ba85e37d4d1909f7fbef5ec215938b8cc74c68758197867390"
 dependencies = [
  "thiserror",
 ]
@@ -1248,9 +1248,9 @@ checksum = "c811ca4a8c853ef420abd8592ba53ddbbac90410fab6903b3e79972a631f7680"
 
 [[package]]
 name = "yrs"
-version = "0.11.2"
+version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd45a7bd25be78f285276a9054183e5b77cfcce79ecca1beebd0c8816bef32e1"
+checksum = "fd3ce14710ed995855c5fb6df36934678d5d6bcbbd093aa5c15fb2e860b2d4e1"
 dependencies = [
  "lib0",
  "rand 0.7.3",
@@ -1259,7 +1259,7 @@ dependencies = [
 
 [[package]]
 name = "yrs-warp"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-trait",
  "futures-util",
