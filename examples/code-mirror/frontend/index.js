@@ -24,7 +24,7 @@ export const userColor = usercolors[random.uint32() % usercolors.length]
 const doc = new Y.Doc()
 const ytext = doc.getText('codemirror')
 
-const provider = new WebsocketProvider('ws://localhost:8000', 'my-room', doc)
+const provider = new WebsocketProvider('ws://localhost:8000', 'my-room', doc, { disableBc: true })
 
 const undoManager = new Y.UndoManager(ytext)
 

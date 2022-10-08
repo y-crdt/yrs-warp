@@ -26,9 +26,9 @@ use yrs::StateVector;
 ///
 /// stringify[messageType] stringifies a message definition (messageType is already read from the bufffer)
 
-const MSG_SYNC_STEP_1: u8 = 0;
-const MSG_SYNC_STEP_2: u8 = 1;
-const MSG_SYNC_UPDATE: u8 = 2;
+pub const MSG_SYNC_STEP_1: u8 = 0;
+pub const MSG_SYNC_STEP_2: u8 = 1;
+pub const MSG_SYNC_UPDATE: u8 = 2;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Message {

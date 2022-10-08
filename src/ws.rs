@@ -1,4 +1,5 @@
-use crate::awareness::{Awareness, AwarenessUpdate};
+use crate::awareness::{Awareness, AwarenessRef, AwarenessUpdate, Event};
+use crate::sync::MSG_SYNC_UPDATE;
 use crate::{awareness, sync};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -8,7 +9,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::spawn;
-use tokio::sync::RwLock;
+use tokio::sync::broadcast::{channel, Receiver, Sender};
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::{JoinError, JoinHandle};
 use warp::ws::WebSocket;
 use yrs::updates::decoder::{Decode, Decoder, DecoderV1};
@@ -52,6 +54,7 @@ use yrs::Update;
 /// ```
 pub struct WarpConn {
     processing_loop: JoinHandle<Result<(), Error>>,
+    inbox: ConnInbox,
 }
 
 impl WarpConn {
@@ -61,8 +64,10 @@ impl WarpConn {
     /// While creation of new [WarpConn] always succeeds, a connection itself can possibly fail
     /// while processing incoming input/output. This can be detected by awaiting for returned
     /// [WarpConn] and handling the awaited result.
-    pub fn new(awareness: Arc<RwLock<Awareness>>, ws: WebSocket) -> Self {
-        let (mut sink, mut source) = ws.split();
+    pub fn new(awareness: AwarenessRef, ws: WebSocket) -> Self {
+        let (sink, mut source) = ws.split();
+        let mut sink = Arc::new(Mutex::new(sink));
+        let inbox = ConnInbox(sink.clone());
         let processing_loop = spawn(async move {
             // at the beginning send SyncStep1 and AwarenessUpdate
             if let Err(e) = Self::init(&awareness, &mut sink).await {
@@ -77,14 +82,22 @@ impl WarpConn {
                     }
                 }
             }
+
             Ok(())
         });
-        WarpConn { processing_loop }
+        WarpConn {
+            processing_loop,
+            inbox,
+        }
+    }
+
+    pub fn inbox(&self) -> &ConnInbox {
+        &self.inbox
     }
 
     async fn init(
-        awareness: &Arc<RwLock<Awareness>>,
-        sink: &mut SplitSink<WebSocket, warp::ws::Message>,
+        awareness: &AwarenessRef,
+        sink: &mut Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>,
     ) -> Result<(), Error> {
         let (sv, update) = {
             let awareness = awareness.read().await;
@@ -92,18 +105,18 @@ impl WarpConn {
             let update = awareness.update()?;
             (sv, update)
         };
-        let msg = Message::Sync(sync::Message::SyncStep1(sv));
-        sink.send(warp::ws::Message::binary(msg.encode_v1()))
-            .await?;
-        let msg = Message::Awareness(update);
-        sink.send(warp::ws::Message::binary(msg.encode_v1()))
-            .await?;
+        let sync_step_1 = Message::Sync(sync::Message::SyncStep1(sv)).encode_v1();
+        let update = Message::Awareness(update).encode_v1();
+
+        let mut sender = sink.lock().await;
+        sender.send(warp::ws::Message::binary(sync_step_1)).await?;
+        sender.send(warp::ws::Message::binary(update)).await?;
         Ok(())
     }
 
     async fn process(
-        awareness: &Arc<RwLock<Awareness>>,
-        sink: &mut SplitSink<WebSocket, warp::ws::Message>,
+        awareness: &AwarenessRef,
+        sink: &mut Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>,
         input: Result<warp::ws::Message, warp::Error>,
     ) -> Result<(), Error> {
         let input = input?;
@@ -113,7 +126,9 @@ impl WarpConn {
             match Message::decode(&mut decoder) {
                 Ok(msg) => {
                     if let Some(reply) = handle_msg(&awareness, msg).await? {
-                        sink.send(warp::ws::Message::binary(reply.encode_v1()))
+                        let mut sender = sink.lock().await;
+                        sender
+                            .send(warp::ws::Message::binary(reply.encode_v1()))
                             .await?;
                     }
                     true
@@ -135,6 +150,105 @@ impl core::future::Future for WarpConn {
             Poll::Ready(Err(e)) => Poll::Ready(Err(Error::Schedule(e))),
             Poll::Ready(Ok(r)) => Poll::Ready(r),
         }
+    }
+}
+
+#[async_trait::async_trait]
+pub trait Inbox {
+    type Item;
+    type Error: std::error::Error + Send + Sync;
+
+    async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error>;
+}
+
+#[derive(Debug, Clone)]
+pub struct ConnInbox(Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>);
+
+#[async_trait::async_trait]
+impl Inbox for ConnInbox {
+    type Item = warp::ws::Message;
+    type Error = Error;
+
+    async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error> {
+        let mut g = self.0.lock().await;
+        g.send(item).await?;
+        Ok(())
+    }
+}
+
+pub struct BroadcastGroup {
+    awareness_ref: AwarenessRef,
+    sender: Sender<warp::ws::Message>,
+    receiver: Receiver<warp::ws::Message>,
+    awareness_sub: awareness::Subscription<Event>,
+    doc_sub: yrs::Subscription<yrs::UpdateEvent>,
+}
+
+unsafe impl Send for BroadcastGroup {}
+unsafe impl Sync for BroadcastGroup {}
+
+impl BroadcastGroup {
+    pub async fn open(awareness_ref: AwarenessRef, capacity: usize) -> Self {
+        let (sender, receiver) = channel(capacity);
+        let (doc_sub, awareness_sub) = {
+            let mut awareness = awareness_ref.write().await;
+            let sink = sender.clone();
+            let doc_sub = awareness.doc_mut().observe_update_v1(move |_txn, u| {
+                println!("broadcasting document update: {:?}", u.update);
+                let mut bin = Vec::with_capacity(u.update.len() + 2);
+                bin.push(MSG_SYNC);
+                bin.push(MSG_SYNC_UPDATE);
+                bin.extend_from_slice(&u.update);
+                let msg = warp::ws::Message::binary(bin);
+                if let Err(e) = sink.send(msg) {
+                    eprintln!("couldn't broadcast the document update: {}", e);
+                }
+            });
+            let sink = sender.clone();
+            let awareness_sub = awareness.on_update(move |awareness, e| {
+                let added = e.added();
+                let updated = e.updated();
+                let removed = e.removed();
+                let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
+                changed.extend_from_slice(added);
+                changed.extend_from_slice(updated);
+                changed.extend_from_slice(removed);
+
+                if let Ok(u) = awareness.update_with_clients(changed) {
+                    println!("broadcasting awareness update: {:?}", u);
+                    let bin = Message::Awareness(u).encode_v1();
+                    let msg = warp::ws::Message::binary(bin);
+                    if let Err(e) = sink.send(msg) {
+                        eprintln!("couldn't broadcast awareness update: {}", e)
+                    }
+                }
+            });
+            (doc_sub, awareness_sub)
+        };
+        BroadcastGroup {
+            awareness_ref,
+            sender,
+            receiver,
+            awareness_sub,
+            doc_sub,
+        }
+    }
+
+    pub fn join<I>(&self, mut inbox: I) -> JoinHandle<Result<(), I::Error>>
+    where
+        I: Inbox<Item = warp::ws::Message> + Send + Sync + 'static,
+    {
+        let mut receiver = self.sender.subscribe();
+        println!("new inbox joined to broadcasting group");
+        spawn(async move {
+            while let Ok(msg) = receiver.recv().await {
+                println!("broadcasted message to inbox");
+                if let Err(e) = inbox.send(msg).await {
+                    return Err(e);
+                }
+            }
+            Ok(())
+        })
     }
 }
 
