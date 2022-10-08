@@ -1264,7 +1264,6 @@ dependencies = [
  "async-trait",
  "futures-util",
  "lib0",
- "log",
  "thiserror",
  "tokio",
  "warp",
