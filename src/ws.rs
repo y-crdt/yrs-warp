@@ -1,4 +1,4 @@
-use crate::awareness::{Awareness, AwarenessUpdate};
+use crate::awareness::{Awareness, AwarenessRef, AwarenessUpdate};
 use crate::{awareness, sync};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -8,7 +8,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::spawn;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::task::{JoinError, JoinHandle};
 use warp::ws::WebSocket;
 use yrs::updates::decoder::{Decode, Decoder, DecoderV1};
@@ -52,6 +52,7 @@ use yrs::Update;
 /// ```
 pub struct WarpConn {
     processing_loop: JoinHandle<Result<(), Error>>,
+    inbox: ConnInbox,
 }
 
 impl WarpConn {
@@ -61,8 +62,10 @@ impl WarpConn {
     /// While creation of new [WarpConn] always succeeds, a connection itself can possibly fail
     /// while processing incoming input/output. This can be detected by awaiting for returned
     /// [WarpConn] and handling the awaited result.
-    pub fn new(awareness: Arc<RwLock<Awareness>>, ws: WebSocket) -> Self {
-        let (mut sink, mut source) = ws.split();
+    pub fn new(awareness: AwarenessRef, ws: WebSocket) -> Self {
+        let (sink, mut source) = ws.split();
+        let mut sink = Arc::new(Mutex::new(sink));
+        let inbox = ConnInbox(sink.clone());
         let processing_loop = spawn(async move {
             // at the beginning send SyncStep1 and AwarenessUpdate
             if let Err(e) = Self::init(&awareness, &mut sink).await {
@@ -77,14 +80,24 @@ impl WarpConn {
                     }
                 }
             }
+
             Ok(())
         });
-        WarpConn { processing_loop }
+        WarpConn {
+            processing_loop,
+            inbox,
+        }
+    }
+
+    /// Returns a reference to a [ConnInbox] that can be used to send data through an underlying
+    /// websocket connection.
+    pub fn inbox(&self) -> &ConnInbox {
+        &self.inbox
     }
 
     async fn init(
-        awareness: &Arc<RwLock<Awareness>>,
-        sink: &mut SplitSink<WebSocket, warp::ws::Message>,
+        awareness: &AwarenessRef,
+        sink: &mut Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>,
     ) -> Result<(), Error> {
         let (sv, update) = {
             let awareness = awareness.read().await;
@@ -92,18 +105,18 @@ impl WarpConn {
             let update = awareness.update()?;
             (sv, update)
         };
-        let msg = Message::Sync(sync::Message::SyncStep1(sv));
-        sink.send(warp::ws::Message::binary(msg.encode_v1()))
-            .await?;
-        let msg = Message::Awareness(update);
-        sink.send(warp::ws::Message::binary(msg.encode_v1()))
-            .await?;
+        let sync_step_1 = Message::Sync(sync::Message::SyncStep1(sv)).encode_v1();
+        let update = Message::Awareness(update).encode_v1();
+
+        let mut sender = sink.lock().await;
+        sender.send(warp::ws::Message::binary(sync_step_1)).await?;
+        sender.send(warp::ws::Message::binary(update)).await?;
         Ok(())
     }
 
     async fn process(
-        awareness: &Arc<RwLock<Awareness>>,
-        sink: &mut SplitSink<WebSocket, warp::ws::Message>,
+        awareness: &AwarenessRef,
+        sink: &mut Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>,
         input: Result<warp::ws::Message, warp::Error>,
     ) -> Result<(), Error> {
         let input = input?;
@@ -113,7 +126,9 @@ impl WarpConn {
             match Message::decode(&mut decoder) {
                 Ok(msg) => {
                     if let Some(reply) = handle_msg(&awareness, msg).await? {
-                        sink.send(warp::ws::Message::binary(reply.encode_v1()))
+                        let mut sender = sink.lock().await;
+                        sender
+                            .send(warp::ws::Message::binary(reply.encode_v1()))
                             .await?;
                     }
                     true
@@ -138,12 +153,40 @@ impl core::future::Future for WarpConn {
     }
 }
 
-const MSG_SYNC: u8 = 0;
-const MSG_AWARENESS: u8 = 1;
-const MSG_AUTH: u8 = 2;
-const MSG_QUERY_AWARENESS: u8 = 3;
+/// An asynchronous trait that defines a capability to send custom messages to an implementing type
+/// in an asynchronous and potentially fail-prone fashion.
+#[async_trait::async_trait]
+pub trait Inbox {
+    type Item;
+    type Error: std::error::Error + Send + Sync;
 
-const PERMISSION_DENIED: u8 = 0;
+    async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error>;
+}
+
+/// An input entry for a related [WarpConn]. It can be used to send the binary data to a correlated
+/// websocket connection. This structure implements a [Clone] trait and can be safely passed to a
+/// different tasks.
+#[derive(Debug, Clone)]
+pub struct ConnInbox(Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>);
+
+#[async_trait::async_trait]
+impl Inbox for ConnInbox {
+    type Item = Vec<u8>;
+    type Error = Error;
+
+    async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error> {
+        let mut g = self.0.lock().await;
+        g.send(warp::ws::Message::binary(item)).await?;
+        Ok(())
+    }
+}
+
+pub const MSG_SYNC: u8 = 0;
+pub const MSG_AWARENESS: u8 = 1;
+pub const MSG_AUTH: u8 = 2;
+pub const MSG_QUERY_AWARENESS: u8 = 3;
+
+pub const PERMISSION_DENIED: u8 = 0;
 
 async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<Message>, Error> {
     match msg {
@@ -182,7 +225,7 @@ async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<M
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Message {
+pub(crate) enum Message {
     Sync(sync::Message),
     Auth(Option<String>),
     AwarenessQuery,

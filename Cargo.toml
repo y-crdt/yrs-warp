@@ -19,3 +19,4 @@ warp = "0.3"
 thiserror = "1.0"
 futures-util = "0.3"
 tokio = { version = "1.20", features = ["full"] }
+async-trait = "0.1"

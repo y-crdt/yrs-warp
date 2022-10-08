@@ -1,12 +1,12 @@
 use std::sync::Arc;
+use tokio::select;
 use tokio::sync::RwLock;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use yrs::Doc;
-use yrs_warp::awareness::Awareness;
+use yrs_warp::awareness::{Awareness, AwarenessRef};
+use yrs_warp::broadcast::BroadcastGroup;
 use yrs_warp::ws::WarpConn;
-
-type AwarenessRef = Arc<RwLock<Awareness>>;
 
 const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
 
@@ -29,11 +29,16 @@ async fn main() {
         Arc::new(RwLock::new(Awareness::new(doc)))
     };
 
+    // open a broadcast group that listens to awareness and document updates
+    // and has a pending message buffer of up to 32 updates
+    let bcast = Arc::new(BroadcastGroup::open(awareness.clone(), 32).await);
+
     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
 
     let ws = warp::path("my-room")
         .and(warp::ws())
         .and(warp::any().map(move || awareness.clone()))
+        .and(warp::any().map(move || bcast.clone()))
         .and_then(ws_handler);
 
     let routes = ws.or(static_files);
@@ -41,18 +46,29 @@ async fn main() {
     warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
 }
 
-async fn ws_handler(ws: Ws, awareness: AwarenessRef) -> Result<impl Reply, Rejection> {
-    Ok(ws.on_upgrade(move |socket| peer(socket, awareness)))
+async fn ws_handler(
+    ws: Ws,
+    awareness: AwarenessRef,
+    bcast: Arc<BroadcastGroup>,
+) -> Result<impl Reply, Rejection> {
+    Ok(ws.on_upgrade(move |socket| peer(socket, awareness, bcast)))
 }
 
-async fn peer(ws: WebSocket, awareness: AwarenessRef) {
+async fn peer(ws: WebSocket, awareness: AwarenessRef, bcast: Arc<BroadcastGroup>) {
     let conn = WarpConn::new(awareness, ws);
-    match conn.await {
-        Ok(()) => {
-            println!("peer disconnected");
+    let sub = bcast.join(conn.inbox().clone());
+    select! {
+        res = sub => {
+            match res {
+                Ok(_) => println!("broadcasting for channel finished successfully"),
+                Err(e) => eprintln!("broadcasting for channel finished abruptly: {}", e),
+            }
         }
-        Err(err) => {
-            eprintln!("peer error occurred: {}", err);
+        res = conn => {
+            match res {
+                Ok(_) => println!("peer disconnected"),
+                Err(e) => eprintln!("peer error occurred: {}", e),
+            }
         }
     }
 }

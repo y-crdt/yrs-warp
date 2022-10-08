@@ -1,14 +1,19 @@
+use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::rc::{Rc, Weak};
+use std::sync::Arc;
+use std::time::Instant;
 use thiserror::Error;
-use tokio::sync::broadcast::Sender;
+use tokio::sync::RwLock;
 use yrs::block::ClientID;
 use yrs::updates::decoder::{Decode, Decoder};
 use yrs::updates::encoder::{Encode, Encoder};
 use yrs::Doc;
 
-pub const OUTDATED_TIMEOUT: Duration = Duration::from_millis(3000);
+/// Type alias over [Awareness] struct hidden behind Arc and read-write lock to provide safe
+/// multi-threaded support.
+pub type AwarenessRef = Arc<RwLock<Awareness>>;
 
 const NULL_STR: &str = "null";
 
@@ -28,7 +33,7 @@ pub struct Awareness {
     doc: Doc,
     states: HashMap<ClientID, String>,
     meta: HashMap<ClientID, MetaClientState>,
-    on_update: Option<Sender<Event>>,
+    on_update: Option<EventHandler<Event>>,
 }
 
 unsafe impl Send for Awareness {}
@@ -47,19 +52,13 @@ impl Awareness {
         }
     }
 
-    /// Creates a new instance of [Awareness] struct, which operates over a given document.
-    /// Awareness instance has full ownership of that document. If necessary it can be accessed
-    /// using either [Awareness::doc] or [Awareness::doc_mut] methods.
-    ///
-    /// This method accepts a sender channel, that is used to propagate any update events about
-    /// client changes detected as a result of modifying the awareness state.
-    pub fn with_observer(doc: Doc, on_update: Sender<Event>) -> Self {
-        Awareness {
-            doc,
-            on_update: Some(on_update),
-            states: HashMap::new(),
-            meta: HashMap::new(),
-        }
+    /// Returns a channel receiver for an incoming awareness events. This channel can be cloned.
+    pub fn on_update<F>(&mut self, f: F) -> Subscription<Event>
+    where
+        F: Fn(&Awareness, &Event) -> () + 'static,
+    {
+        let eh = self.on_update.get_or_insert_with(EventHandler::default);
+        eh.subscribe(f)
     }
 
     /// Returns a read-only reference to an underlying [Doc].
@@ -100,14 +99,14 @@ impl Awareness {
         match self.states.entry(client_id) {
             Entry::Occupied(mut e) => {
                 e.insert(new);
-                if let Some(sender) = self.on_update.as_mut() {
-                    let _ = sender.send(Event::new(vec![], vec![client_id], vec![]));
+                if let Some(eh) = self.on_update.as_ref() {
+                    eh.trigger(self, &Event::new(vec![], vec![client_id], vec![]));
                 }
             }
             Entry::Vacant(e) => {
                 e.insert(new);
-                if let Some(sender) = self.on_update.as_mut() {
-                    let _ = sender.send(Event::new(vec![client_id], vec![], vec![]));
+                if let Some(eh) = self.on_update.as_ref() {
+                    eh.trigger(self, &Event::new(vec![client_id], vec![], vec![]));
                 }
             }
         }
@@ -117,9 +116,12 @@ impl Awareness {
     pub fn remove_state(&mut self, client_id: ClientID) {
         let prev_state = self.states.remove(&client_id);
         self.update_meta(client_id);
-        if let Some(sender) = self.on_update.as_mut() {
+        if let Some(eh) = self.on_update.as_ref() {
             if prev_state.is_some() {
-                let _ = sender.send(Event::new(Vec::default(), Vec::default(), vec![client_id]));
+                eh.trigger(
+                    self,
+                    &Event::new(Vec::default(), Vec::default(), vec![client_id]),
+                );
             }
         }
     }
@@ -244,9 +246,9 @@ impl Awareness {
             };
         }
 
-        if let Some(sender) = self.on_update.as_mut() {
+        if let Some(eh) = self.on_update.as_ref() {
             if !added.is_empty() || !updated.is_empty() || !removed.is_empty() {
-                let _ = sender.send(Event::new(added, updated, removed));
+                eh.trigger(self, &Event::new(added, updated, removed));
             }
         }
 
@@ -257,6 +259,62 @@ impl Awareness {
 impl Default for Awareness {
     fn default() -> Self {
         Awareness::new(Doc::new())
+    }
+}
+
+struct EventHandler<T> {
+    seq_nr: u32,
+    subscribers: Rc<RefCell<HashMap<u32, Box<dyn Fn(&Awareness, &T) -> ()>>>>,
+}
+
+impl<T> EventHandler<T> {
+    pub fn subscribe<F>(&mut self, f: F) -> Subscription<T>
+    where
+        F: Fn(&Awareness, &T) -> () + 'static,
+    {
+        let subscription_id = self.seq_nr;
+        self.seq_nr += 1;
+        {
+            let func = Box::new(f);
+            let mut subs = self.subscribers.borrow_mut();
+            subs.insert(subscription_id, func);
+        }
+        Subscription {
+            subscription_id,
+            subscribers: Rc::downgrade(&self.subscribers),
+        }
+    }
+
+    pub fn trigger(&self, awareness: &Awareness, arg: &T) {
+        let subs = self.subscribers.borrow();
+        for func in subs.values() {
+            func(awareness, arg);
+        }
+    }
+}
+
+impl<T> Default for EventHandler<T> {
+    fn default() -> Self {
+        EventHandler {
+            seq_nr: 0,
+            subscribers: Rc::new(RefCell::new(HashMap::new())),
+        }
+    }
+}
+
+/// Whenever a new callback is being registered, a [Subscription] is made. Whenever this
+/// subscription a registered callback is cancelled and will not be called any more.
+pub struct Subscription<T> {
+    subscription_id: u32,
+    subscribers: Weak<RefCell<HashMap<u32, Box<dyn Fn(&Awareness, &T) -> ()>>>>,
+}
+
+impl<T> Drop for Subscription<T> {
+    fn drop(&mut self) {
+        if let Some(subs) = self.subscribers.upgrade() {
+            let mut s = subs.borrow_mut();
+            s.remove(&self.subscription_id);
+        }
     }
 }
 
@@ -379,10 +437,16 @@ mod test {
     #[test]
     fn awareness() -> Result<(), Box<dyn std::error::Error>> {
         let (s1, mut o_local) = channel(1);
-        let mut local = Awareness::with_observer(Doc::with_client_id(1), s1);
+        let mut local = Awareness::new(Doc::with_client_id(1));
+        let sub_local = local.on_update(move |_, e| {
+            s1.send(e.clone()).unwrap();
+        });
 
         let (s2, mut o_remote) = channel(1);
-        let mut remote = Awareness::with_observer(Doc::with_client_id(2), s2);
+        let mut remote = Awareness::new(Doc::with_client_id(2));
+        let sub_remote = local.on_update(move |_, e| {
+            s2.send(e.clone()).unwrap();
+        });
 
         local.set_local_state("{x:3}");
         let mut e_local = update(&mut o_local, &local, &mut remote)?;
