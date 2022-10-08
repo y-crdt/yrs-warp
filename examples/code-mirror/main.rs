@@ -5,7 +5,8 @@ use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use yrs::Doc;
 use yrs_warp::awareness::{Awareness, AwarenessRef};
-use yrs_warp::ws::{BroadcastGroup, WarpConn};
+use yrs_warp::broadcast::BroadcastGroup;
+use yrs_warp::ws::WarpConn;
 
 const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
 
@@ -28,6 +29,8 @@ async fn main() {
         Arc::new(RwLock::new(Awareness::new(doc)))
     };
 
+    // open a broadcast group that listens to awareness and document updates
+    // and has a pending message buffer of up to 32 updates
     let bcast = Arc::new(BroadcastGroup::open(awareness.clone(), 32).await);
 
     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));

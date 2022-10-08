@@ -1,5 +1,4 @@
-use crate::awareness::{Awareness, AwarenessRef, AwarenessUpdate, Event};
-use crate::sync::MSG_SYNC_UPDATE;
+use crate::awareness::{Awareness, AwarenessRef, AwarenessUpdate};
 use crate::{awareness, sync};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -9,7 +8,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use thiserror::Error;
 use tokio::spawn;
-use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::sync::{Mutex, RwLock};
 use tokio::task::{JoinError, JoinHandle};
 use warp::ws::WebSocket;
@@ -91,6 +89,8 @@ impl WarpConn {
         }
     }
 
+    /// Returns a reference to a [ConnInbox] that can be used to send data through an underlying
+    /// websocket connection.
     pub fn inbox(&self) -> &ConnInbox {
         &self.inbox
     }
@@ -153,6 +153,8 @@ impl core::future::Future for WarpConn {
     }
 }
 
+/// An asynchronous trait that defines a capability to send custom messages to an implementing type
+/// in an asynchronous and potentially fail-prone fashion.
 #[async_trait::async_trait]
 pub trait Inbox {
     type Item;
@@ -161,103 +163,30 @@ pub trait Inbox {
     async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error>;
 }
 
+/// An input entry for a related [WarpConn]. It can be used to send the binary data to a correlated
+/// websocket connection. This structure implements a [Clone] trait and can be safely passed to a
+/// different tasks.
 #[derive(Debug, Clone)]
 pub struct ConnInbox(Arc<Mutex<SplitSink<WebSocket, warp::ws::Message>>>);
 
 #[async_trait::async_trait]
 impl Inbox for ConnInbox {
-    type Item = warp::ws::Message;
+    type Item = Vec<u8>;
     type Error = Error;
 
     async fn send(&mut self, item: Self::Item) -> Result<(), Self::Error> {
         let mut g = self.0.lock().await;
-        g.send(item).await?;
+        g.send(warp::ws::Message::binary(item)).await?;
         Ok(())
     }
 }
 
-pub struct BroadcastGroup {
-    awareness_ref: AwarenessRef,
-    sender: Sender<warp::ws::Message>,
-    receiver: Receiver<warp::ws::Message>,
-    awareness_sub: awareness::Subscription<Event>,
-    doc_sub: yrs::Subscription<yrs::UpdateEvent>,
-}
+pub const MSG_SYNC: u8 = 0;
+pub const MSG_AWARENESS: u8 = 1;
+pub const MSG_AUTH: u8 = 2;
+pub const MSG_QUERY_AWARENESS: u8 = 3;
 
-unsafe impl Send for BroadcastGroup {}
-unsafe impl Sync for BroadcastGroup {}
-
-impl BroadcastGroup {
-    pub async fn open(awareness_ref: AwarenessRef, capacity: usize) -> Self {
-        let (sender, receiver) = channel(capacity);
-        let (doc_sub, awareness_sub) = {
-            let mut awareness = awareness_ref.write().await;
-            let sink = sender.clone();
-            let doc_sub = awareness.doc_mut().observe_update_v1(move |_txn, u| {
-                println!("broadcasting document update: {:?}", u.update);
-                let mut bin = Vec::with_capacity(u.update.len() + 2);
-                bin.push(MSG_SYNC);
-                bin.push(MSG_SYNC_UPDATE);
-                bin.extend_from_slice(&u.update);
-                let msg = warp::ws::Message::binary(bin);
-                if let Err(e) = sink.send(msg) {
-                    eprintln!("couldn't broadcast the document update: {}", e);
-                }
-            });
-            let sink = sender.clone();
-            let awareness_sub = awareness.on_update(move |awareness, e| {
-                let added = e.added();
-                let updated = e.updated();
-                let removed = e.removed();
-                let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
-                changed.extend_from_slice(added);
-                changed.extend_from_slice(updated);
-                changed.extend_from_slice(removed);
-
-                if let Ok(u) = awareness.update_with_clients(changed) {
-                    println!("broadcasting awareness update: {:?}", u);
-                    let bin = Message::Awareness(u).encode_v1();
-                    let msg = warp::ws::Message::binary(bin);
-                    if let Err(e) = sink.send(msg) {
-                        eprintln!("couldn't broadcast awareness update: {}", e)
-                    }
-                }
-            });
-            (doc_sub, awareness_sub)
-        };
-        BroadcastGroup {
-            awareness_ref,
-            sender,
-            receiver,
-            awareness_sub,
-            doc_sub,
-        }
-    }
-
-    pub fn join<I>(&self, mut inbox: I) -> JoinHandle<Result<(), I::Error>>
-    where
-        I: Inbox<Item = warp::ws::Message> + Send + Sync + 'static,
-    {
-        let mut receiver = self.sender.subscribe();
-        println!("new inbox joined to broadcasting group");
-        spawn(async move {
-            while let Ok(msg) = receiver.recv().await {
-                println!("broadcasted message to inbox");
-                if let Err(e) = inbox.send(msg).await {
-                    return Err(e);
-                }
-            }
-            Ok(())
-        })
-    }
-}
-
-const MSG_SYNC: u8 = 0;
-const MSG_AWARENESS: u8 = 1;
-const MSG_AUTH: u8 = 2;
-const MSG_QUERY_AWARENESS: u8 = 3;
-
-const PERMISSION_DENIED: u8 = 0;
+pub const PERMISSION_DENIED: u8 = 0;
 
 async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<Message>, Error> {
     match msg {
@@ -296,7 +225,7 @@ async fn handle_msg(a: &Arc<RwLock<Awareness>>, msg: Message) -> Result<Option<M
 }
 
 #[derive(Debug, Eq, PartialEq)]
-enum Message {
+pub(crate) enum Message {
     Sync(sync::Message),
     Auth(Option<String>),
     AwarenessQuery,

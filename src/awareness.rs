@@ -3,7 +3,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use thiserror::Error;
 use tokio::sync::RwLock;
 use yrs::block::ClientID;
@@ -11,9 +11,9 @@ use yrs::updates::decoder::{Decode, Decoder};
 use yrs::updates::encoder::{Encode, Encoder};
 use yrs::Doc;
 
+/// Type alias over [Awareness] struct hidden behind Arc and read-write lock to provide safe
+/// multi-threaded support.
 pub type AwarenessRef = Arc<RwLock<Awareness>>;
-
-pub const OUTDATED_TIMEOUT: Duration = Duration::from_millis(3000);
 
 const NULL_STR: &str = "null";
 
@@ -302,6 +302,8 @@ impl<T> Default for EventHandler<T> {
     }
 }
 
+/// Whenever a new callback is being registered, a [Subscription] is made. Whenever this
+/// subscription a registered callback is cancelled and will not be called any more.
 pub struct Subscription<T> {
     subscription_id: u32,
     subscribers: Weak<RefCell<HashMap<u32, Box<dyn Fn(&Awareness, &T) -> ()>>>>,
@@ -435,10 +437,16 @@ mod test {
     #[test]
     fn awareness() -> Result<(), Box<dyn std::error::Error>> {
         let (s1, mut o_local) = channel(1);
-        let mut local = Awareness::with_observer(Doc::with_client_id(1), s1);
+        let mut local = Awareness::new(Doc::with_client_id(1));
+        let sub_local = local.on_update(move |_, e| {
+            s1.send(e.clone()).unwrap();
+        });
 
         let (s2, mut o_remote) = channel(1);
-        let mut remote = Awareness::with_observer(Doc::with_client_id(2), s2);
+        let mut remote = Awareness::new(Doc::with_client_id(2));
+        let sub_remote = local.on_update(move |_, e| {
+            s2.send(e.clone()).unwrap();
+        });
 
         local.set_local_state("{x:3}");
         let mut e_local = update(&mut o_local, &local, &mut remote)?;
