@@ -9,7 +9,7 @@ use tokio::sync::RwLock;
 use yrs::block::ClientID;
 use yrs::updates::decoder::{Decode, Decoder};
 use yrs::updates::encoder::{Encode, Encoder};
-use yrs::Doc;
+use yrs::{Doc, SubscriptionId};
 
 /// Type alias over [Awareness] struct hidden behind Arc and read-write lock to provide safe
 /// multi-threaded support.
@@ -307,6 +307,14 @@ impl<T> Default for EventHandler<T> {
 pub struct Subscription<T> {
     subscription_id: u32,
     subscribers: Weak<RefCell<HashMap<u32, Box<dyn Fn(&Awareness, &T) -> ()>>>>,
+}
+
+impl<T> Into<SubscriptionId> for Subscription<T> {
+    fn into(self) -> SubscriptionId {
+        let id = self.subscription_id;
+        std::mem::forget(self);
+        id
+    }
 }
 
 impl<T> Drop for Subscription<T> {
