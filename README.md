@@ -57,3 +57,32 @@ async fn peer(ws: WebSocket, awareness: AwarenessRef, bcast: Arc<BroadcastGroup>
     }
 }
 ```
+
+## Custom protocol extensions
+
+[y-sync](https://crates.io/crates/y-sync) protocol enables to extend it's own protocol, and yrs-warp supports this as well.
+This can be done by implementing your own protocol, eg.:
+
+```rust
+use y_sync::sync::Protocol;
+
+struct EchoProtocol;
+impl Protocol for EchoProtocol {
+    fn missing_handle(
+        &self,
+        awareness: &mut Awareness,
+        tag: u8,
+        data: Vec<u8>,
+    ) -> Result<Option<Message>, Error> {
+        // all messages prefixed with tags unknown to y-sync protocol
+        // will be echo-ed back to the sender
+        Ok(Some(Message::Custom(tag, data)))
+    }
+}
+
+async fn peer(ws: WebSocket, awareness: AwarenessRef) {
+    //.. later in code create a warp connection using new protocol
+    let conn = WarpConn::with_protocol(awareness, ws, EchoProtocol);
+    // .. rest of the code
+}
+```
