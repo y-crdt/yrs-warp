@@ -15,7 +15,7 @@ readme = "./README.md"
 [dependencies]
 lib0 = "0.13"
 yrs = "0.13"
-y-sync = { version = "0.1", path = "../y-sync" }
+y-sync = "0.1"
 warp = "0.3"
 futures-util = "0.3"
 tokio = { version = "1.20", features = ["full"] }
