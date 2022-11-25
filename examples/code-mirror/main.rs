@@ -3,10 +3,11 @@ use tokio::select;
 use tokio::sync::RwLock;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
-use yrs::Doc;
-use yrs_warp::awareness::{Awareness, AwarenessRef};
+use y_sync::awareness::Awareness;
+use yrs::{Doc, Text, Transact};
 use yrs_warp::broadcast::BroadcastGroup;
 use yrs_warp::ws::WarpConn;
+use yrs_warp::AwarenessRef;
 
 const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
 
@@ -17,8 +18,8 @@ async fn main() {
         let doc = Doc::new();
         {
             // pre-initialize code mirror document with some text
-            let mut txn = doc.transact();
-            let txt = txn.get_text("codemirror");
+            let txt = doc.get_or_insert_text("codemirror");
+            let mut txn = doc.transact_mut();
             txt.push(
                 &mut txn,
                 r#"function hello() {

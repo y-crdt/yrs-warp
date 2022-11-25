@@ -14,6 +14,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "atomic_refcell"
+version = "0.1.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73b5e5f48b927f04e952dedc932f31995a65a0bf65ec971c74436e51bf6e970d"
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -398,9 +404,9 @@ dependencies = [
 
 [[package]]
 name = "lib0"
-version = "0.12.0"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db088f7d98d549ba85e37d4d1909f7fbef5ec215938b8cc74c68758197867390"
+checksum = "e94a6af28e5367649fd86e023b04ae91c27693321c8f6e006c66a2e0d753db0d"
 dependencies = [
  "thiserror",
 ]
@@ -1247,14 +1253,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c811ca4a8c853ef420abd8592ba53ddbbac90410fab6903b3e79972a631f7680"
 
 [[package]]
-name = "yrs"
-version = "0.12.0"
+name = "y-sync"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd3ce14710ed995855c5fb6df36934678d5d6bcbbd093aa5c15fb2e860b2d4e1"
+checksum = "723a9d0324845bf34b9fad60930214e0cf452b9fc7f209ddfefbc9b168e317fe"
 dependencies = [
+ "lib0",
+ "thiserror",
+ "yrs",
+]
+
+[[package]]
+name = "yrs"
+version = "0.13.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eec254d45c9fde8383ba99ccf036ea75f46dd822a24cb79ff0f392679032f948"
+dependencies = [
+ "atomic_refcell",
  "lib0",
  "rand 0.7.3",
  "smallstr",
+ "thiserror",
 ]
 
 [[package]]
@@ -1264,8 +1283,8 @@ dependencies = [
  "async-trait",
  "futures-util",
  "lib0",
- "thiserror",
  "tokio",
  "warp",
+ "y-sync",
  "yrs",
 ]
