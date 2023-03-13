@@ -15,8 +15,11 @@ readme = "./README.md"
 [dependencies]
 lib0 = ">= 0.16"
 yrs = ">= 0.16"
-y-sync = ">= 0.2"
+y-sync = { version = "0.3", features = ["net"] }
 warp = "0.3"
-futures-util = "0.3"
-tokio = { version = "1.20", features = ["full"] }
-async-trait = "0.1"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio = { version = "1", features = ["rt","net","sync","macros"] }
+
+[dev-dependencies]
+tokio-tungstenite = "0.18"
+tokio = { version = "1", features = ["full"] }
