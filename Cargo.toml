@@ -18,7 +18,7 @@ yrs = ">= 0.16"
 y-sync = { version = "0.3", features = ["net"] }
 warp = "0.3"
 futures-util = { version = "0.3", features = ["sink"] }
-tokio = { version = "1", features = ["rt","net","sync"] }
+tokio = { version = "1", features = ["rt","net","sync","macros"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.18"
