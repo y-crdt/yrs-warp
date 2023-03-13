@@ -377,11 +377,11 @@ mod test {
         let text = doc.get_or_insert_text("test");
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("127.0.0.1:6600", Arc::new(bcast)).await?;
+        let server = start_server("0.0.0.0:6600", Arc::new(bcast)).await?;
 
         let doc = Doc::new();
         let (n, sub) = create_notifier(&doc);
-        let c1 = client("ws://127.0.0.1:6600/my-room", doc).await?;
+        let c1 = client("ws://localhost:6600/my-room", doc).await?;
 
         {
             let lock = awareness.write().await;
@@ -403,7 +403,6 @@ mod test {
 
     #[tokio::test]
     async fn subscribed_client_fetches_initial_state() -> Result<(), Box<dyn std::error::Error>> {
-        let server_addr = SocketAddr::from_str("127.0.0.1:6601").unwrap();
         let doc = Doc::with_client_id(1);
         let text = doc.get_or_insert_text("test");
 
@@ -411,11 +410,11 @@ mod test {
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("127.0.0.1:6601", Arc::new(bcast)).await?;
+        let server = start_server("0.0.0.0:6601", Arc::new(bcast)).await?;
 
         let doc = Doc::new();
         let (n, sub) = create_notifier(&doc);
-        let c1 = client("ws://127.0.0.1:6601/my-room", doc).await?;
+        let c1 = client("ws://localhost:6601/my-room", doc).await?;
 
         timeout(TIMEOUT, n.notified()).await?;
 
@@ -437,10 +436,10 @@ mod test {
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("127.0.0.1:6602", Arc::new(bcast)).await?;
+        let server = start_server("0.0.0.0:6602", Arc::new(bcast)).await?;
 
         let d1 = Doc::with_client_id(2);
-        let c1 = client("ws://127.0.0.1:6602/my-room", d1).await?;
+        let c1 = client("ws://localhost:6602/my-room", d1).await?;
         // by default changes made by document on the client side are not propagated automatically
         let sub11 = {
             let sink = c1.sink();
@@ -463,7 +462,7 @@ mod test {
 
         let d2 = Doc::with_client_id(3);
         let (n2, sub2) = create_notifier(&d2);
-        let c2 = client("ws://127.0.0.1:6602/my-room", d2).await?;
+        let c2 = client("ws://localhost:6602/my-room", d2).await?;
 
         {
             let a = c1.awareness().write().await;
@@ -492,10 +491,10 @@ mod test {
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("127.0.0.1:6603", Arc::new(bcast)).await?;
+        let server = start_server("0.0.0.0:6603", Arc::new(bcast)).await?;
 
         let d1 = Doc::with_client_id(2);
-        let c1 = client("ws://127.0.0.1:6603/my-room", d1).await?;
+        let c1 = client("ws://localhost:6603/my-room", d1).await?;
         // by default changes made by document on the client side are not propagated automatically
         let sub11 = {
             let sink = c1.sink();
@@ -518,11 +517,11 @@ mod test {
 
         let d2 = Doc::with_client_id(3);
         let (n2, sub2) = create_notifier(&d2);
-        let c2 = client("ws://127.0.0.1:6603/my-room", d2).await?;
+        let c2 = client("ws://localhost:6603/my-room", d2).await?;
 
         let d3 = Doc::with_client_id(4);
         let (n3, sub3) = create_notifier(&d3);
-        let c3 = client("ws://127.0.0.1:6603/my-room", d3).await?;
+        let c3 = client("ws://localhost:6603/my-room", d3).await?;
 
         {
             let a = c1.awareness().write().await;
