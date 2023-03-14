@@ -1,0 +1,33 @@
+{
+  "name": "frontend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "clean": "rm -rf ./dist",
+    "build": "npm run clean && mkdir ./dist && rollup -c && cp ./index.html ./dist/index.html"
+  },
+  "keywords": [
+    "yjs",
+    "yrs",
+    "codemirror"
+  ],
+  "author": "Bartosz Sypytkowski <b.sypytkowski@gmail.com>",
+  "license": "ISC",
+  "dependencies": {
+    "@codemirror/lang-javascript": "^6.0.2",
+    "@codemirror/language": "github:codemirror/language",
+    "@codemirror/state": "^6.1.1",
+    "codemirror": "^6.0.1",
+    "lib0": "^0.2.52",
+    "y-codemirror.next": "^0.3.2",
+    "y-webrtc": "^10.2.4",
+    "yjs": "^13.5.0"
+  },
+  "devDependencies": {
+    "rollup": "^2.79.0",
+    "@rollup/plugin-babel": "^5.3.1",
+    "@rollup/plugin-commonjs": "^22.0.2",
+    "@rollup/plugin-node-resolve": "^13.3.0"
+  }
+}
