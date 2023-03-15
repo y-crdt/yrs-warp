@@ -68,8 +68,44 @@ impl Protocol for EchoProtocol {
 }
 
 async fn peer(ws: WebSocket, awareness: AwarenessRef) {
-    //.. later in code create a warp connection using new protocol
-    let conn = WarpConn::with_protocol(awareness, ws, EchoProtocol);
+    //.. later in code subscribe with custom protocol parameter
+    let sub = bcast.subscribe_with(sink, stream, EchoProtocol);
     // .. rest of the code
 }
 ```
+
+## y-webrtc and signaling service
+
+Additionally to performing it's role as a [y-websocket](https://docs.yjs.dev/ecosystem/connection-provider/y-websocket) 
+server, `yrs-warp` also provides a signaling server implementation used by [y-webrtc](https://github.com/yjs/y-webrtc)
+clients to exchange information necessary to connect WebRTC peers together and make them subscribe/unsubscribe from specific rooms.
+
+```rust
+use warp::{Filter, Rejection, Reply};
+use warp::ws::{Ws, WebSocket};
+use yrs_warp::signaling::{SignalingService, signaling_conn};
+
+#[tokio::main]
+async fn main() {
+  let signaling = SignalingService::new();
+  let ws = warp::path("signaling")
+      .and(warp::ws())
+      .and(warp::any().map(move || signaling.clone()))
+      .and_then(ws_handler);
+  warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
+}
+async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejection> {
+  Ok(ws.on_upgrade(move |socket| peer(socket, svc)))
+}
+async fn peer(ws: WebSocket, svc: SignalingService) {
+  match signaling_conn(ws, svc).await {
+    Ok(_) => println!("signaling connection stopped"),
+    Err(e) => eprintln!("signaling connection failed: {}", e),
+  }
+}
+```
+
+
+## Sponsors
+
+[![NLNET](https://nlnet.nl/image/logo_nlnet.svg)](https://nlnet.nl/)
