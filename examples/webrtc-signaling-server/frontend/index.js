@@ -24,7 +24,7 @@ export const userColor = usercolors[random.uint32() % usercolors.length]
 const doc = new Y.Doc()
 const ytext = doc.getText('codemirror')
 
-const provider = new WebrtcProvider('my-room', doc, { signaling: ['ws://localhost:8000/signaling'] })
+const provider = new WebrtcProvider('sample', doc, { signaling: ['ws://localhost:8000/signaling'] })
 
 const undoManager = new Y.UndoManager(ytext)
 

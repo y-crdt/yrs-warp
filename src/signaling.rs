@@ -13,6 +13,37 @@ use warp::Error;
 
 const PING_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Signaling service is used by y-webrtc protocol in order to exchange WebRTC offerings between
+/// clients subscribing to particular rooms.
+///
+/// # Example
+///
+/// ```rust
+/// use warp::{Filter, Rejection, Reply};
+/// use warp::ws::{Ws, WebSocket};
+/// use yrs_warp::signaling::{SignalingService, signaling_conn};
+///
+/// fn main() {
+///   let signaling = SignalingService::new();
+///   let ws = warp::path("signaling")
+///       .and(warp::ws())
+///       .and(warp::any().map(move || signaling.clone()))
+///       .and_then(ws_handler);
+///
+///   //warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
+/// }
+///
+/// async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejection> {
+///   Ok(ws.on_upgrade(move |socket| peer(socket, svc)))
+/// }
+///
+/// async fn peer(ws: WebSocket, svc: SignalingService) {
+///   match signaling_conn(ws, svc).await {
+///     Ok(_) => println!("signaling connection stopped"),
+///     Err(e) => eprintln!("signaling connection failed: {}", e),
+///   }
+/// }
+/// ```
 #[derive(Debug, Clone)]
 pub struct SignalingService(Topics);
 
@@ -25,8 +56,8 @@ impl SignalingService {
         let topics = self.0.read().await;
         if let Some(subs) = topics.get(topic) {
             for sub in subs {
-                if let Err(e) = sub.try_send(msg.clone()).await {
-                    //todo: log close failure?
+                if let Err(_e) = sub.try_send(msg.clone()).await {
+                    //todo: log send failure?
                 }
             }
         }
@@ -37,7 +68,7 @@ impl SignalingService {
         let mut topics = self.0.write().await;
         if let Some(subs) = topics.remove(topic) {
             for sub in subs {
-                if let Err(e) = sub.close().await {
+                if let Err(_e) = sub.close().await {
                     //todo: log close failure?
                 }
             }
@@ -55,7 +86,7 @@ impl SignalingService {
         }
 
         for conn in all_conns {
-            if let Err(e) = conn.close().await {
+            if let Err(_e) = conn.close().await {
                 //todo: log close failure?
             }
         }
@@ -111,6 +142,8 @@ impl PartialEq<Self> for WsSink {
 
 impl Eq for WsSink {}
 
+/// Handle incoming signaling connection - it's a websocket connection used by y-webrtc protocol
+/// to exchange offering metadata between y-webrtc peers. It also manages topic/room access.
 pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<(), Error> {
     let mut topics: Topics = service.0;
     let (sink, mut stream) = ws.split();
@@ -150,6 +183,9 @@ pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<
         }
     }
 }
+
+const PING_MSG: &'static str = r#"{"type":"ping"}"#;
+const PONG_MSG: &'static str = r#"{"type":"pong"}"#;
 
 async fn process_msg(
     msg: Message,
@@ -198,12 +234,17 @@ async fn process_msg(
                 if let Some(receivers) = topics.get(topic) {
                     for receiver in receivers.iter() {
                         if let Err(e) = receiver.try_send(Message::text(json)).await {
-                            //todo: log error
+                            //todo: it's not a hard issue, but maybe log an error?
                         }
                     }
                 }
             }
-            Signal::Announce { .. } => {}
+            Signal::Ping => {
+                ws.try_send(Message::text(PONG_MSG)).await?;
+            }
+            Signal::Pong => {
+                ws.try_send(Message::text(PING_MSG)).await?;
+            }
         }
     } else if msg.is_close() {
         let mut topics = topics.write().await;
@@ -222,22 +263,34 @@ async fn process_msg(
     Ok(())
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct ConnState {
     closed: bool,
     pong_received: bool,
     subscribed_topics: HashSet<Arc<str>>,
 }
 
+impl Default for ConnState {
+    fn default() -> Self {
+        ConnState {
+            closed: false,
+            pong_received: true,
+            subscribed_topics: HashSet::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub(crate) enum Signal<'a> {
-    #[serde(rename = "announce")]
-    Announce { from: &'a str },
     #[serde(rename = "publish")]
     Publish { topic: &'a str },
     #[serde(rename = "subscribe")]
     Subscribe { topics: Vec<&'a str> },
     #[serde(rename = "unsubscribe")]
     Unsubscribe { topics: Vec<&'a str> },
+    #[serde(rename = "ping")]
+    Ping,
+    #[serde(rename = "pong")]
+    Pong,
 }

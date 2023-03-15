@@ -1,16 +1,8 @@
-use futures_util::StreamExt;
-use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
 use warp::ws::{WebSocket, Ws};
-use warp::{Error, Filter, Rejection, Reply};
-use y_sync::awareness::Awareness;
-use y_sync::net::BroadcastGroup;
-use yrs::{Doc, Text, Transact};
+use warp::{Filter, Rejection, Reply};
 use yrs_warp::signaling::{signaling_conn, SignalingService};
-use yrs_warp::ws::{WarpSink, WarpStream};
-use yrs_warp::AwarenessRef;
 
-const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
+const STATIC_FILES_DIR: &str = "examples/webrtc-signaling-server/frontend/dist";
 
 #[tokio::main]
 async fn main() {
@@ -33,6 +25,7 @@ async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejecti
 }
 
 async fn peer(ws: WebSocket, svc: SignalingService) {
+    println!("new incoming signaling connection");
     match signaling_conn(ws, svc).await {
         Ok(_) => println!("signaling connection stopped"),
         Err(e) => eprintln!("signaling connection failed: {}", e),
