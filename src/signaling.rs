@@ -53,11 +53,25 @@ impl SignalingService {
     }
 
     pub async fn publish(&self, topic: &str, msg: Message) -> Result<(), Error> {
-        let topics = self.0.read().await;
-        if let Some(subs) = topics.get(topic) {
-            for sub in subs {
-                if let Err(_e) = sub.try_send(msg.clone()).await {
-                    //todo: log send failure?
+        let mut failed = Vec::new();
+        {
+            let topics = self.0.read().await;
+            if let Some(subs) = topics.get(topic) {
+                let client_count = subs.len();
+                log::info!("publishing message to {client_count} clients: {msg:?}");
+                for sub in subs {
+                    if let Err(e) = sub.try_send(msg.clone()).await {
+                        log::info!("failed to send {msg:?}: {e}");
+                        failed.push(sub.clone());
+                    }
+                }
+            }
+        }
+        if !failed.is_empty() {
+            let mut topics = self.0.write().await;
+            if let Some(subs) = topics.get_mut(topic) {
+                for f in failed {
+                    subs.remove(&f);
                 }
             }
         }
@@ -68,8 +82,8 @@ impl SignalingService {
         let mut topics = self.0.write().await;
         if let Some(subs) = topics.remove(topic) {
             for sub in subs {
-                if let Err(_e) = sub.close().await {
-                    //todo: log close failure?
+                if let Err(e) = sub.close().await {
+                    log::warn!("failed to close connection on topic '{topic}': {e}");
                 }
             }
         }
@@ -86,8 +100,8 @@ impl SignalingService {
         }
 
         for conn in all_conns {
-            if let Err(_e) = conn.close().await {
-                //todo: log close failure?
+            if let Err(e) = conn.close().await {
+                log::warn!("failed to close connection: {e}");
             }
         }
 
@@ -203,6 +217,7 @@ async fn process_msg(
                 if !topic_names.is_empty() {
                     let mut topics = topics.write().await;
                     for topic in topic_names {
+                        log::trace!("subscribing new client to '{topic}'");
                         if let Some((key, _)) = topics.get_key_value(topic) {
                             state.subscribed_topics.insert(key.clone());
                             let subs = topics.get_mut(topic).unwrap();
@@ -224,17 +239,32 @@ async fn process_msg(
                     let mut topics = topics.write().await;
                     for topic in topic_names {
                         if let Some(subs) = topics.get_mut(topic) {
+                            log::trace!("unsubscribing client from '{topic}'");
                             subs.remove(ws);
                         }
                     }
                 }
             }
             Signal::Publish { topic } => {
-                let topics = topics.read().await;
-                if let Some(receivers) = topics.get(topic) {
-                    for receiver in receivers.iter() {
-                        if let Err(e) = receiver.try_send(Message::text(json)).await {
-                            //todo: it's not a hard issue, but maybe log an error?
+                let mut failed = Vec::new();
+                {
+                    let topics = topics.read().await;
+                    if let Some(receivers) = topics.get(topic) {
+                        let client_count = receivers.len();
+                        log::trace!("publishing on {client_count} clients at '{topic}': {json}");
+                        for receiver in receivers.iter() {
+                            if let Err(e) = receiver.try_send(Message::text(json)).await {
+                                log::info!("failed to publish message {json} on '{topic}': {e}");
+                                failed.push(receiver.clone());
+                            }
+                        }
+                    }
+                }
+                if !failed.is_empty() {
+                    let mut topics = topics.write().await;
+                    if let Some(receivers) = topics.get_mut(topic) {
+                        for f in failed {
+                            receivers.remove(&f);
                         }
                     }
                 }
