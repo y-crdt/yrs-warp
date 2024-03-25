@@ -1,13 +1,11 @@
+use crate::conn::Connection;
+use crate::AwarenessRef;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{Stream, StreamExt};
 use std::pin::Pin;
-use std::sync::Arc;
 use std::task::{Context, Poll};
-use tokio::sync::RwLock;
 use warp::ws::{Message, WebSocket};
-use y_sync::awareness::Awareness;
-use y_sync::net::Connection;
-use y_sync::sync::Error;
+use yrs::sync::Error;
 
 /// Connection Wrapper over a [WebSocket], which implements a Yjs/Yrs awareness and update exchange
 /// protocol.
@@ -19,7 +17,7 @@ use y_sync::sync::Error;
 pub struct WarpConn(Connection<WarpSink, WarpStream>);
 
 impl WarpConn {
-    pub fn new(awareness: Arc<RwLock<Awareness>>, socket: WebSocket) -> Self {
+    pub fn new(awareness: AwarenessRef, socket: WebSocket) -> Self {
         let (sink, stream) = socket.split();
         let conn = Connection::new(awareness, WarpSink(sink), WarpStream(stream));
         WarpConn(conn)
@@ -52,7 +50,7 @@ impl core::future::Future for WarpConn {
 /// use tokio::task::JoinHandle;
 /// use warp::{Filter, Rejection, Reply};
 /// use warp::ws::{WebSocket, Ws};
-/// use yrs_warp::BroadcastGroup;
+/// use yrs_warp::broadcast::BroadcastGroup;
 /// use yrs_warp::ws::{WarpSink, WarpStream};
 ///
 /// async fn start_server(
@@ -154,7 +152,7 @@ impl futures_util::Sink<Vec<u8>> for WarpSink {
 /// use tokio::task::JoinHandle;
 /// use warp::{Filter, Rejection, Reply};
 /// use warp::ws::{WebSocket, Ws};
-/// use yrs_warp::BroadcastGroup;
+/// use yrs_warp::broadcast::BroadcastGroup;
 /// use yrs_warp::ws::{WarpSink, WarpStream};
 ///
 /// async fn start_server(
@@ -222,6 +220,8 @@ impl Stream for WarpStream {
 
 #[cfg(test)]
 mod test {
+    use crate::broadcast::BroadcastGroup;
+    use crate::conn::Connection;
     use crate::ws::{WarpSink, WarpStream};
     use futures_util::stream::{SplitSink, SplitStream};
     use futures_util::{ready, SinkExt, Stream, StreamExt};
@@ -240,12 +240,9 @@ mod test {
     use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
     use warp::ws::{WebSocket, Ws};
     use warp::{Filter, Rejection, Reply, Sink};
-    use y_sync::awareness::Awareness;
-    use y_sync::net::BroadcastGroup;
-    use y_sync::net::Connection;
-    use y_sync::sync::Error;
+    use yrs::sync::{Awareness, Error};
     use yrs::updates::encoder::Encode;
-    use yrs::{Doc, GetString, Text, Transact, UpdateSubscription};
+    use yrs::{Doc, GetString, Subscription, Text, Transact};
 
     async fn start_server(
         addr: &str,
@@ -358,7 +355,7 @@ mod test {
         ))
     }
 
-    fn create_notifier(doc: &Doc) -> (Arc<Notify>, UpdateSubscription) {
+    fn create_notifier(doc: &Doc) -> (Arc<Notify>, Subscription) {
         let n = Arc::new(Notify::new());
         let sub = {
             let n = n.clone();
@@ -449,9 +446,8 @@ mod test {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
-                        let msg =
-                            y_sync::sync::Message::Sync(y_sync::sync::SyncMessage::Update(update))
-                                .encode_v1();
+                        let msg = yrs::sync::Message::Sync(yrs::sync::SyncMessage::Update(update))
+                            .encode_v1();
                         let mut sink = sink.lock().await;
                         sink.send(msg).await.unwrap();
                     });
@@ -504,9 +500,8 @@ mod test {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
-                        let msg =
-                            y_sync::sync::Message::Sync(y_sync::sync::SyncMessage::Update(update))
-                                .encode_v1();
+                        let msg = yrs::sync::Message::Sync(yrs::sync::SyncMessage::Update(update))
+                            .encode_v1();
                         let mut sink = sink.lock().await;
                         sink.send(msg).await.unwrap();
                     });

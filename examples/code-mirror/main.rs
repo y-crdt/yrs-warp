@@ -3,9 +3,9 @@ use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
-use y_sync::awareness::Awareness;
-use y_sync::net::BroadcastGroup;
+use yrs::sync::Awareness;
 use yrs::{Doc, Text, Transact};
+use yrs_warp::broadcast::BroadcastGroup;
 use yrs_warp::ws::{WarpSink, WarpStream};
 use yrs_warp::AwarenessRef;
 
