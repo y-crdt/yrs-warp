@@ -322,10 +322,10 @@ mod test {
         let text = doc.get_or_insert_text("test");
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server(server_addr.clone(), bcast).await?;
+        let _server = start_server(server_addr.clone(), bcast).await?;
 
         let doc = Doc::new();
-        let (n, sub) = create_notifier(&doc);
+        let (n, _sub) = create_notifier(&doc);
         let c1 = client(server_addr.clone(), doc).await?;
 
         {
@@ -356,10 +356,10 @@ mod test {
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server(server_addr.clone(), bcast).await?;
+        let _server = start_server(server_addr.clone(), bcast).await?;
 
         let doc = Doc::new();
-        let (n, sub) = create_notifier(&doc);
+        let (n, _sub) = create_notifier(&doc);
         let c1 = client(server_addr.clone(), doc).await?;
 
         timeout(TIMEOUT, n.notified()).await?;
@@ -379,20 +379,20 @@ mod test {
     async fn changes_from_one_client_reach_others() -> Result<(), Box<dyn std::error::Error>> {
         let server_addr = SocketAddr::from_str("127.0.0.1:6602").unwrap();
         let doc = Doc::with_client_id(1);
-        let text = doc.get_or_insert_text("test");
+        let _text = doc.get_or_insert_text("test");
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server(server_addr.clone(), bcast).await?;
+        let _server = start_server(server_addr.clone(), bcast).await?;
 
         let d1 = Doc::with_client_id(2);
         let c1 = client(server_addr.clone(), d1).await?;
         // by default changes made by document on the client side are not propagated automatically
-        let sub11 = {
+        let _sub11 = {
             let sink = c1.sink();
             let a = c1.awareness().write().await;
             let doc = a.doc();
-            doc.observe_update_v1(move |txn, e| {
+            doc.observe_update_v1(move |_, e| {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
@@ -406,7 +406,7 @@ mod test {
         };
 
         let d2 = Doc::with_client_id(3);
-        let (n2, sub2) = create_notifier(&d2);
+        let (n2, _sub2) = create_notifier(&d2);
         let c2 = client(server_addr.clone(), d2).await?;
 
         {
@@ -433,20 +433,20 @@ mod test {
     async fn client_failure_doesnt_affect_others() -> Result<(), Box<dyn std::error::Error>> {
         let server_addr = SocketAddr::from_str("127.0.0.1:6603").unwrap();
         let doc = Doc::with_client_id(1);
-        let text = doc.get_or_insert_text("test");
+        let _ = doc.get_or_insert_text("test");
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server(server_addr.clone(), bcast).await?;
+        let _server = start_server(server_addr.clone(), bcast).await?;
 
         let d1 = Doc::with_client_id(2);
         let c1 = client(server_addr.clone(), d1).await?;
         // by default changes made by document on the client side are not propagated automatically
-        let sub11 = {
+        let _sub11 = {
             let sink = c1.sink();
             let a = c1.awareness().write().await;
             let doc = a.doc();
-            doc.observe_update_v1(move |txn, e| {
+            doc.observe_update_v1(move |_, e| {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
@@ -502,7 +502,7 @@ mod test {
         drop(n2);
         drop(sub2);
 
-        let (n2, sub2) = {
+        let (n2, _sub2) = {
             let a = c2.awareness().write().await;
             let doc = a.doc();
             create_notifier(doc)

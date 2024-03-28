@@ -923,7 +923,19 @@ checksum = "c3523ab5a71916ccf420eebdf5521fcef02141234bbc0b8a49f2fdc4544364ef"
 dependencies = [
  "log",
  "pin-project-lite",
+ "tracing-attributes",
  "tracing-core",
+]
+
+[[package]]
+name = "tracing-attributes"
+version = "0.1.27"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "34704c8d6ebcbc939824180af020566b01a7c01f80641264eba0999f6c2b6be7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1272,9 +1284,9 @@ checksum = "32b752e52a2da0ddfbdbcc6fceadfeede4c939ed16d13e648833a61dfb611ed8"
 
 [[package]]
 name = "yrs"
-version = "0.18.1"
+version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cd95835cc7973a5867b769d5373effbfe75138f0544c4ad7cca7bc5080ca1897"
+checksum = "a4058d69bbbc97181d53d9d093a4b892001b84601f2fc4e27f48c8862bc8b369"
 dependencies = [
  "arc-swap",
  "atomic_refcell",
@@ -1292,12 +1304,12 @@ version = "0.7.0"
 dependencies = [
  "bytes",
  "futures-util",
- "log",
  "serde",
  "serde_json",
  "tokio",
  "tokio-tungstenite 0.21.0",
  "tokio-util",
+ "tracing",
  "warp",
  "yrs",
 ]

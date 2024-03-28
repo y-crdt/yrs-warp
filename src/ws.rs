@@ -368,24 +368,23 @@ mod test {
     const TIMEOUT: Duration = Duration::from_secs(5);
 
     #[tokio::test]
-    async fn change_introduced_by_server_reaches_subscribed_clients(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    async fn change_introduced_by_server_reaches_subscribed_clients() {
         let doc = Doc::with_client_id(1);
         let text = doc.get_or_insert_text("test");
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("0.0.0.0:6600", Arc::new(bcast)).await?;
+        let _server = start_server("0.0.0.0:6600", Arc::new(bcast)).await.unwrap();
 
         let doc = Doc::new();
-        let (n, sub) = create_notifier(&doc);
-        let c1 = client("ws://localhost:6600/my-room", doc).await?;
+        let (n, _sub) = create_notifier(&doc);
+        let c1 = client("ws://localhost:6600/my-room", doc).await.unwrap();
 
         {
             let lock = awareness.write().await;
             text.push(&mut lock.doc().transact_mut(), "abc");
         }
 
-        timeout(TIMEOUT, n.notified()).await?;
+        timeout(TIMEOUT, n.notified()).await.unwrap();
 
         {
             let awareness = c1.awareness().read().await;
@@ -394,12 +393,10 @@ mod test {
             let str = text.get_string(&doc.transact());
             assert_eq!(str, "abc".to_string());
         }
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn subscribed_client_fetches_initial_state() -> Result<(), Box<dyn std::error::Error>> {
+    async fn subscribed_client_fetches_initial_state() {
         let doc = Doc::with_client_id(1);
         let text = doc.get_or_insert_text("test");
 
@@ -407,13 +404,13 @@ mod test {
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("0.0.0.0:6601", Arc::new(bcast)).await?;
+        let _server = start_server("0.0.0.0:6601", Arc::new(bcast)).await.unwrap();
 
         let doc = Doc::new();
-        let (n, sub) = create_notifier(&doc);
-        let c1 = client("ws://localhost:6601/my-room", doc).await?;
+        let (n, _sub) = create_notifier(&doc);
+        let c1 = client("ws://localhost:6601/my-room", doc).await.unwrap();
 
-        timeout(TIMEOUT, n.notified()).await?;
+        timeout(TIMEOUT, n.notified()).await.unwrap();
 
         {
             let awareness = c1.awareness().read().await;
@@ -422,27 +419,25 @@ mod test {
             let str = text.get_string(&doc.transact());
             assert_eq!(str, "abc".to_string());
         }
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn changes_from_one_client_reach_others() -> Result<(), Box<dyn std::error::Error>> {
+    async fn changes_from_one_client_reach_others() {
         let doc = Doc::with_client_id(1);
-        let text = doc.get_or_insert_text("test");
+        let _ = doc.get_or_insert_text("test");
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("0.0.0.0:6602", Arc::new(bcast)).await?;
+        let _server = start_server("0.0.0.0:6602", Arc::new(bcast)).await.unwrap();
 
         let d1 = Doc::with_client_id(2);
-        let c1 = client("ws://localhost:6602/my-room", d1).await?;
+        let c1 = client("ws://localhost:6602/my-room", d1).await.unwrap();
         // by default changes made by document on the client side are not propagated automatically
-        let sub11 = {
+        let _sub11 = {
             let sink = c1.sink();
             let a = c1.awareness().write().await;
             let doc = a.doc();
-            doc.observe_update_v1(move |txn, e| {
+            doc.observe_update_v1(move |_, e| {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
@@ -457,8 +452,8 @@ mod test {
         };
 
         let d2 = Doc::with_client_id(3);
-        let (n2, sub2) = create_notifier(&d2);
-        let c2 = client("ws://localhost:6602/my-room", d2).await?;
+        let (n2, _sub2) = create_notifier(&d2);
+        let c2 = client("ws://localhost:6602/my-room", d2).await.unwrap();
 
         {
             let a = c1.awareness().write().await;
@@ -467,7 +462,7 @@ mod test {
             text.push(&mut doc.transact_mut(), "def");
         }
 
-        timeout(TIMEOUT, n2.notified()).await?;
+        timeout(TIMEOUT, n2.notified()).await.unwrap();
 
         {
             let awareness = c2.awareness().read().await;
@@ -476,27 +471,25 @@ mod test {
             let str = text.get_string(&doc.transact());
             assert_eq!(str, "def".to_string());
         }
-
-        Ok(())
     }
 
     #[tokio::test]
-    async fn client_failure_doesnt_affect_others() -> Result<(), Box<dyn std::error::Error>> {
+    async fn client_failure_doesnt_affect_others() {
         let doc = Doc::with_client_id(1);
-        let text = doc.get_or_insert_text("test");
+        let _text = doc.get_or_insert_text("test");
 
         let awareness = Arc::new(RwLock::new(Awareness::new(doc)));
         let bcast = BroadcastGroup::new(awareness.clone(), 10).await;
-        let server = start_server("0.0.0.0:6603", Arc::new(bcast)).await?;
+        let _server = start_server("0.0.0.0:6603", Arc::new(bcast)).await.unwrap();
 
         let d1 = Doc::with_client_id(2);
-        let c1 = client("ws://localhost:6603/my-room", d1).await?;
+        let c1 = client("ws://localhost:6603/my-room", d1).await.unwrap();
         // by default changes made by document on the client side are not propagated automatically
-        let sub11 = {
+        let _sub11 = {
             let sink = c1.sink();
             let a = c1.awareness().write().await;
             let doc = a.doc();
-            doc.observe_update_v1(move |txn, e| {
+            doc.observe_update_v1(move |_, e| {
                 let update = e.update.to_owned();
                 if let Some(sink) = sink.upgrade() {
                     task::spawn(async move {
@@ -512,11 +505,11 @@ mod test {
 
         let d2 = Doc::with_client_id(3);
         let (n2, sub2) = create_notifier(&d2);
-        let c2 = client("ws://localhost:6603/my-room", d2).await?;
+        let c2 = client("ws://localhost:6603/my-room", d2).await.unwrap();
 
         let d3 = Doc::with_client_id(4);
         let (n3, sub3) = create_notifier(&d3);
-        let c3 = client("ws://localhost:6603/my-room", d3).await?;
+        let c3 = client("ws://localhost:6603/my-room", d3).await.unwrap();
 
         {
             let a = c1.awareness().write().await;
@@ -553,7 +546,7 @@ mod test {
         drop(n2);
         drop(sub2);
 
-        let (n2, sub2) = {
+        let (n2, _sub2) = {
             let a = c2.awareness().write().await;
             let doc = a.doc();
             create_notifier(doc)
@@ -575,7 +568,5 @@ mod test {
             let str = text.get_string(&doc.transact());
             assert_eq!(str, "abcdef".to_string());
         }
-
-        Ok(())
     }
 }

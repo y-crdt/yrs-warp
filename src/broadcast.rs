@@ -24,6 +24,7 @@ pub struct BroadcastGroup {
     awareness_ref: AwarenessRef,
     sender: Sender<Vec<u8>>,
     receiver: Receiver<Vec<u8>>,
+    awareness_updater: JoinHandle<()>,
 }
 
 unsafe impl Send for BroadcastGroup {}
@@ -38,12 +39,11 @@ impl BroadcastGroup {
     /// provided `buffer_capacity` size.
     pub async fn new(awareness: AwarenessRef, buffer_capacity: usize) -> Self {
         let (sender, receiver) = channel(buffer_capacity);
-        let (doc_sub, awareness_sub) = {
-            let awareness_c = awareness.clone();
-            let mut awareness = awareness.write().await;
-            let sink = sender.clone();
-            let doc_sub = awareness
-                .doc_mut()
+        let awareness_c = Arc::downgrade(&awareness);
+        let mut lock = awareness.write().await;
+        let sink = sender.clone();
+        let doc_sub = {
+            lock.doc_mut()
                 .observe_update_v1(move |_txn, u| {
                     // we manually construct msg here to avoid update data copying
                     let mut encoder = EncoderV1::new();
@@ -55,29 +55,46 @@ impl BroadcastGroup {
                         // current broadcast group is being closed
                     }
                 })
-                .unwrap();
-            let sink = sender.clone();
-            let awareness_sub = awareness.on_update(move |e| {
-                let added = e.added();
-                let updated = e.updated();
-                let removed = e.removed();
-                let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
-                changed.extend_from_slice(added);
-                changed.extend_from_slice(updated);
-                changed.extend_from_slice(removed);
-
-                let awareness = awareness_c.blocking_read();
-                if let Ok(u) = awareness.update_with_clients(changed) {
-                    let msg = Message::Awareness(u).encode_v1();
-                    if let Err(_e) = sink.send(msg) {
-                        // current broadcast group is being closed
-                    }
-                }
-            });
-            (doc_sub, awareness_sub)
+                .unwrap()
         };
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sink = sender.clone();
+        let awareness_sub = lock.on_update(move |e| {
+            let added = e.added();
+            let updated = e.updated();
+            let removed = e.removed();
+            let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
+            changed.extend_from_slice(added);
+            changed.extend_from_slice(updated);
+            changed.extend_from_slice(removed);
+
+            if let Err(_) = tx.send(changed) {
+                tracing::warn!("failed to send awareness update");
+            }
+        });
+        drop(lock);
+        let awareness_updater = tokio::task::spawn(async move {
+            while let Some(changed_clients) = rx.recv().await {
+                if let Some(awareness) = awareness_c.upgrade() {
+                    let awareness = awareness.read().await;
+                    match awareness.update_with_clients(changed_clients) {
+                        Ok(update) => {
+                            if let Err(_) = sink.send(Message::Awareness(update).encode_v1()) {
+                                tracing::warn!("couldn't broadcast awareness update");
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("error while computing awareness update: {}", e)
+                        }
+                    }
+                } else {
+                    return;
+                }
+            }
+        });
         BroadcastGroup {
             awareness_ref: awareness,
+            awareness_updater,
             sender,
             receiver,
             awareness_sub,
@@ -214,6 +231,12 @@ impl BroadcastGroup {
                 protocol.missing_handle(&mut *awareness, tag, data)
             }
         }
+    }
+}
+
+impl Drop for BroadcastGroup {
+    fn drop(&mut self) {
+        self.awareness_updater.abort();
     }
 }
 
