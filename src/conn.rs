@@ -431,7 +431,7 @@ mod test {
 
     #[tokio::test]
     async fn client_failure_doesnt_affect_others() -> Result<(), Box<dyn std::error::Error>> {
-        let server_addr = SocketAddr::from_str("127.0.0.1:6603").unwrap();
+        let server_addr = SocketAddr::from_str("127.0.0.1:6604").unwrap();
         let doc = Doc::with_client_id(1);
         let _ = doc.get_or_insert_text("test");
 
