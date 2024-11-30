@@ -52,12 +52,10 @@ pub struct Connection<Sink, Stream> {
     _storage_sub: StorageSubscription,
 }
 
-// 创建一个包装类型来处理 Debug
 struct StorageSubscription {
-    inner: Box<dyn std::any::Any + Send + Sync>,
+    inner: Arc<Mutex<Option<yrs::Subscription>>>,
 }
 
-// 手动实现 Debug
 impl std::fmt::Debug for StorageSubscription {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("StorageSubscription")
@@ -69,7 +67,7 @@ impl std::fmt::Debug for StorageSubscription {
 impl StorageSubscription {
     fn new(sub: Option<yrs::Subscription>) -> Self {
         Self {
-            inner: Box::new(sub),
+            inner: Arc::new(Mutex::new(sub)),
         }
     }
 }
@@ -77,7 +75,7 @@ impl StorageSubscription {
 impl Default for StorageSubscription {
     fn default() -> Self {
         Self {
-            inner: Box::new(()),
+            inner: Arc::new(Mutex::new(None)),
         }
     }
 }

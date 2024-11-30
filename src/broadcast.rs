@@ -59,16 +59,16 @@ impl BroadcastGroup {
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = sender.clone();
-        let awareness_sub = lock.on_update(move |e| {
-            let added = e.added();
-            let updated = e.updated();
-            let removed = e.removed();
+        let awareness_sub = lock.on_update(move |_awareness, event, _origin| {
+            let added = event.added();
+            let updated = event.updated();
+            let removed = event.removed();
             let mut changed = Vec::with_capacity(added.len() + updated.len() + removed.len());
             changed.extend_from_slice(added);
             changed.extend_from_slice(updated);
             changed.extend_from_slice(removed);
 
-            if let Err(_) = tx.send(changed) {
+            if tx.send(changed).is_err() {
                 tracing::warn!("failed to send awareness update");
             }
         });
@@ -79,7 +79,7 @@ impl BroadcastGroup {
                     let awareness = awareness.read().await;
                     match awareness.update_with_clients(changed_clients) {
                         Ok(update) => {
-                            if let Err(_) = sink.send(Message::Awareness(update).encode_v1()) {
+                            if sink.send(Message::Awareness(update).encode_v1()).is_err() {
                                 tracing::warn!("couldn't broadcast awareness update");
                             }
                         }
@@ -338,7 +338,7 @@ mod test {
         // check awareness update propagation
         {
             let mut a = awareness.write().await;
-            a.set_local_state(r#"{"key":"value"}"#)
+            a.set_local_state(r#"{"key":"value"}"#);
         }
 
         let msg = client_receiver.next().await;
@@ -350,7 +350,7 @@ mod test {
                     1,
                     AwarenessUpdateEntry {
                         clock: 1,
-                        json: r#"{"key":"value"}"#.to_string(),
+                        json: r#"{"key":"value"}"#.to_string().into(),
                     },
                 )]),
             }))
