@@ -142,7 +142,7 @@ where
         {
             let mut awareness = awareness.write().await;
             let mut txn = awareness.doc().transact_mut();
-            if let Err(e) = store.load_doc(&doc_name, &mut txn) {
+            if let Err(e) = store.load_doc(&doc_name, &mut txn).await {
                 tracing::error!("Failed to load document state: {}", e);
             }
         }
@@ -166,7 +166,7 @@ where
         };
 
         while let Some(update) = rx.recv().await {
-            if let Err(e) = store.push_update(&doc_name, &update) {
+            if let Err(e) = store.push_update(&doc_name, &update).await {
                 tracing::error!("Failed to store update for doc {}: {}", doc_name, e);
             } else {
                 tracing::debug!("Successfully stored update for doc {}", doc_name);

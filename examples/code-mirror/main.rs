@@ -1,7 +1,7 @@
 use futures_util::StreamExt;
 use lmdb_rs::{core::DbCreate, Environment};
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use warp::ws::{WebSocket, Ws};
 use warp::{Filter, Rejection, Reply};
 use yrs::sync::Awareness;
@@ -43,7 +43,7 @@ async fn main() {
                 .expect("Failed to create reader transaction");
             let store = LmdbStore::from(db_txn.bind(&handle));
             let mut txn = doc.transact_mut();
-            if let Err(e) = store.load_doc(DOC_NAME, &mut txn) {
+            if let Err(e) = store.load_doc(DOC_NAME, &mut txn).await {
                 tracing::warn!("No existing document found or failed to load: {}", e);
                 // Initialize new document if no existing one found
                 let txt = doc.get_or_insert_text("codemirror");
@@ -61,16 +61,24 @@ async fn main() {
             let env = env.clone();
             let handle = handle.clone();
             let _sub = doc.observe_update_v1(move |_, e| {
-                if let Ok(db_txn) = env.new_transaction() {
-                    let store = LmdbStore::from(db_txn.bind(&handle));
-                    if let Err(e) = store.push_update(DOC_NAME, &e.update) {
-                        tracing::error!("Failed to store update: {}", e);
-                        return;
-                    }
-                    if let Err(e) = db_txn.commit() {
-                        tracing::error!("Failed to commit transaction: {}", e);
-                    }
-                }
+                let env = env.clone();
+                let handle = handle.clone();
+                let update = e.update.clone();
+                tokio::task::block_in_place(|| {
+                    let rt = tokio::runtime::Handle::current();
+                    rt.block_on(async move {
+                        if let Ok(db_txn) = env.new_transaction() {
+                            let store = LmdbStore::from(db_txn.bind(&handle));
+                            if let Err(e) = store.push_update(DOC_NAME, &update).await {
+                                tracing::error!("Failed to store update: {}", e);
+                                return;
+                            }
+                            if let Err(e) = db_txn.commit() {
+                                tracing::error!("Failed to commit transaction: {}", e);
+                            }
+                        }
+                    });
+                });
             });
         }
 

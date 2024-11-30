@@ -26,8 +26,11 @@ thiserror = "2.0.3"
 smallvec = { version = "1.10", features=["write","union","const_generics","const_new"] }
 anyhow = "1.0"
 tempdir = "0.3.7"
+google-cloud-storage = "0.23.0"
+async-trait = "0.1.83"
+futures = { version = "0.3", features = ["executor"] }
 
 [dev-dependencies]
-tokio-tungstenite = "0.21"
+tokio-tungstenite = "0.24.0"
 tokio = { version = "1", features = ["full"] }
 bytes = "1.6"
