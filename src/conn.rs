@@ -14,7 +14,28 @@ use yrs::sync::Awareness;
 use yrs::sync::{DefaultProtocol, Error, Message, MessageReader, Protocol, SyncMessage};
 use yrs::updates::decoder::{Decode, DecoderV1};
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
-use yrs::Update;
+use yrs::{Transact, Update};
+
+use crate::storage::kv::DocOps;
+use crate::storage::lmdb::LmdbStore;
+
+/// Connection configuration options
+#[derive(Debug, Clone)]
+pub struct ConnectionConfig {
+    /// Whether to enable persistent storage
+    pub storage_enabled: bool,
+    /// Document name for storage (required if storage enabled)
+    pub doc_name: Option<String>,
+}
+
+impl Default for ConnectionConfig {
+    fn default() -> Self {
+        Self {
+            storage_enabled: false,
+            doc_name: None,
+        }
+    }
+}
 
 /// Connection handler over a pair of message streams, which implements a Yjs/Yrs awareness and
 /// update exchange protocol.
@@ -27,6 +48,38 @@ pub struct Connection<Sink, Stream> {
     awareness: Arc<RwLock<Awareness>>,
     inbox: Arc<Mutex<Sink>>,
     _stream: PhantomData<Stream>,
+    #[allow(dead_code)]
+    _storage_sub: StorageSubscription,
+}
+
+// 创建一个包装类型来处理 Debug
+struct StorageSubscription {
+    inner: Box<dyn std::any::Any + Send + Sync>,
+}
+
+// 手动实现 Debug
+impl std::fmt::Debug for StorageSubscription {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StorageSubscription")
+            .field("inner", &"<subscription>")
+            .finish()
+    }
+}
+
+impl StorageSubscription {
+    fn new(sub: Option<yrs::Subscription>) -> Self {
+        Self {
+            inner: Box::new(sub),
+        }
+    }
+}
+
+impl Default for StorageSubscription {
+    fn default() -> Self {
+        Self {
+            inner: Box::new(()),
+        }
+    }
 }
 
 impl<Sink, Stream, E> Connection<Sink, Stream>
@@ -58,12 +111,8 @@ where
     Sink: SinkExt<Vec<u8>, Error = E> + Send + Sync + Unpin + 'static,
     E: Into<Error> + Send + Sync,
 {
-    /// Wraps incoming [WebSocket] connection and supplied [Awareness] accessor into a new
+    /// Wraps incoming connection and supplied [Awareness] accessor into a new
     /// connection handler capable of exchanging Yrs/Yjs messages.
-    ///
-    /// While creation of new [WarpConn] always succeeds, a connection itself can possibly fail
-    /// while processing incoming input/output. This can be detected by awaiting for returned
-    /// [WarpConn] and handling the awaited result.
     pub fn new(awareness: Arc<RwLock<Awareness>>, sink: Sink, stream: Stream) -> Self {
         Self::with_protocol(awareness, sink, stream, DefaultProtocol)
     }
@@ -73,12 +122,64 @@ where
         &self.awareness
     }
 
-    /// Wraps incoming [WebSocket] connection and supplied [Awareness] accessor into a new
+    /// Creates a new connection with storage support
+    pub async fn with_storage(
+        awareness: Arc<RwLock<Awareness>>,
+        sink: Sink,
+        stream: Stream,
+        store: Arc<LmdbStore<'static>>,
+        config: ConnectionConfig,
+    ) -> Self {
+        if !config.storage_enabled {
+            return Self::new(awareness, sink, stream);
+        }
+
+        let doc_name = config
+            .doc_name
+            .expect("doc_name required when storage enabled");
+
+        // Load document state from storage
+        {
+            let mut awareness = awareness.write().await;
+            let mut txn = awareness.doc().transact_mut();
+            if let Err(e) = store.load_doc(&doc_name, &mut txn) {
+                tracing::error!("Failed to load document state: {}", e);
+            }
+        }
+
+        // Set up storage subscription
+        let store_clone = store.clone();
+        let doc_name_clone = doc_name.clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+
+        let storage_sub = {
+            let awareness = awareness.read().await;
+            awareness
+                .doc()
+                .observe_update_v1(move |_, update| {
+                    let update = update.update.clone();
+                    if let Err(e) = tx.send(update) {
+                        tracing::error!("Failed to send update to storage channel: {}", e);
+                    }
+                })
+                .unwrap()
+        };
+
+        while let Some(update) = rx.recv().await {
+            if let Err(e) = store.push_update(&doc_name, &update) {
+                tracing::error!("Failed to store update for doc {}: {}", doc_name, e);
+            } else {
+                tracing::debug!("Successfully stored update for doc {}", doc_name);
+            }
+        }
+
+        let mut conn = Self::with_protocol(awareness, sink, stream, DefaultProtocol);
+        conn._storage_sub = StorageSubscription::new(Some(storage_sub));
+        conn
+    }
+
+    /// Wraps incoming connection and supplied [Awareness] accessor into a new
     /// connection handler capable of exchanging Yrs/Yjs messages.
-    ///
-    /// While creation of new [WarpConn] always succeeds, a connection itself can possibly fail
-    /// while processing incoming input/output. This can be detected by awaiting for returned
-    /// [WarpConn] and handling the awaited result.
     pub fn with_protocol<P>(
         awareness: Arc<RwLock<Awareness>>,
         sink: Sink,
@@ -136,11 +237,13 @@ where
 
             Ok(())
         });
+
         Connection {
             processing_loop,
             awareness,
             inbox,
             _stream: PhantomData::default(),
+            _storage_sub: StorageSubscription::default(),
         }
     }
 
@@ -157,10 +260,10 @@ where
             if let Some(reply) = handle_msg(protocol, &awareness, msg).await? {
                 let mut sender = sink.lock().await;
                 if let Err(e) = sender.send(reply.encode_v1()).await {
-                    println!("connection failed to send back the reply");
+                    tracing::error!("Connection failed to send back the reply");
                     return Err(e.into());
                 } else {
-                    println!("connection send back the reply");
+                    tracing::debug!("Connection sent back the reply");
                 }
             }
         }
