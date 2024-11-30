@@ -13,7 +13,6 @@ use yrs::sync::Error;
 /// This connection implements Future pattern and can be awaited upon in order for a caller to
 /// recognize whether underlying websocket connection has been finished gracefully or abruptly.
 #[repr(transparent)]
-#[derive(Debug)]
 pub struct WarpConn(Connection<WarpSink, WarpStream>);
 
 impl WarpConn {

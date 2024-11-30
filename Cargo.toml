@@ -29,6 +29,7 @@ tempdir = "0.3.7"
 google-cloud-storage = "0.23.0"
 async-trait = "0.1.83"
 futures = { version = "0.3", features = ["executor"] }
+redis = { version = "0.23", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 tokio-tungstenite = "0.24.0"

@@ -18,6 +18,8 @@ use yrs::{Transact, Update};
 
 use crate::storage::kv::DocOps;
 use crate::storage::lmdb::LmdbStore;
+use redis::aio::Connection as RedisConnection;
+use redis::AsyncCommands;
 
 /// Connection configuration options
 #[derive(Debug, Clone)]
@@ -26,6 +28,17 @@ pub struct ConnectionConfig {
     pub storage_enabled: bool,
     /// Document name for storage (required if storage enabled)
     pub doc_name: Option<String>,
+    /// Redis configuration (optional)
+    pub redis_config: Option<RedisConfig>,
+}
+
+/// Redis cache configuration
+#[derive(Debug, Clone)]
+pub struct RedisConfig {
+    /// Redis URL
+    pub url: String,
+    /// Cache TTL in seconds
+    pub ttl: u64,
 }
 
 impl Default for ConnectionConfig {
@@ -33,6 +46,7 @@ impl Default for ConnectionConfig {
         Self {
             storage_enabled: false,
             doc_name: None,
+            redis_config: None,
         }
     }
 }
@@ -42,14 +56,13 @@ impl Default for ConnectionConfig {
 ///
 /// This connection implements Future pattern and can be awaited upon in order for a caller to
 /// recognize whether underlying websocket connection has been finished gracefully or abruptly.
-#[derive(Debug)]
 pub struct Connection<Sink, Stream> {
     processing_loop: JoinHandle<Result<(), Error>>,
     awareness: Arc<RwLock<Awareness>>,
     inbox: Arc<Mutex<Sink>>,
     _stream: PhantomData<Stream>,
-    #[allow(dead_code)]
     _storage_sub: StorageSubscription,
+    redis: Option<Arc<Mutex<RedisConnection>>>,
 }
 
 struct StorageSubscription {
@@ -120,7 +133,7 @@ where
         &self.awareness
     }
 
-    /// Creates a new connection with storage support
+    /// Creates a new connection with storage and Redis cache support
     pub async fn with_storage(
         awareness: Arc<RwLock<Awareness>>,
         sink: Sink,
@@ -136,7 +149,43 @@ where
             .doc_name
             .expect("doc_name required when storage enabled");
 
-        // Load document state from storage
+        // Get TTL from config before moving into async block
+        let redis_ttl = config.redis_config.as_ref().map(|c| c.ttl as usize);
+
+        // Initialize Redis connection if configured
+        let redis = if let Some(redis_config) = config.redis_config {
+            let client =
+                redis::Client::open(redis_config.url).expect("Failed to create Redis client");
+            let conn = client
+                .get_async_connection()
+                .await
+                .expect("Failed to connect to Redis");
+            Some(Arc::new(Mutex::new(conn)))
+        } else {
+            None
+        };
+
+        // Try to load from Redis cache first
+        if let Some(redis) = &redis {
+            let mut conn = redis.lock().await;
+            let cache_key = format!("doc:{}", doc_name);
+            if let Ok(cached_data) = conn.get::<_, Vec<u8>>(&cache_key).await {
+                let mut awareness_guard = awareness.write().await;
+                let mut txn = awareness_guard.doc().transact_mut();
+                if let Ok(update) = Update::decode_v1(&cached_data) {
+                    if let Err(e) = txn.apply_update(update) {
+                        tracing::error!("Failed to apply cached update: {}", e);
+                    } else {
+                        tracing::debug!("Successfully loaded document from Redis cache");
+                        drop(txn);
+                        drop(awareness_guard);
+                        return Self::with_redis(awareness, sink, stream, redis.clone());
+                    }
+                }
+            }
+        }
+
+        // Load from persistent storage if cache miss
         {
             let mut awareness = awareness.write().await;
             let mut txn = awareness.doc().transact_mut();
@@ -145,9 +194,10 @@ where
             }
         }
 
-        // Set up storage subscription
+        // Set up storage subscription with Redis caching
         let store_clone = store.clone();
         let doc_name_clone = doc_name.clone();
+        let redis_clone = redis.clone();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
 
         let storage_sub = {
@@ -163,16 +213,45 @@ where
                 .unwrap()
         };
 
-        while let Some(update) = rx.recv().await {
-            if let Err(e) = store.push_update(&doc_name, &update).await {
-                tracing::error!("Failed to store update for doc {}: {}", doc_name, e);
-            } else {
-                tracing::debug!("Successfully stored update for doc {}", doc_name);
+        // Handle updates using spawn_local instead of spawn
+        tokio::task::spawn_local(async move {
+            while let Some(update) = rx.recv().await {
+                // Store in persistent storage
+                if let Err(e) = store_clone.push_update(&doc_name_clone, &update).await {
+                    tracing::error!("Failed to store update: {}", e);
+                }
+
+                // Update Redis cache if enabled
+                if let Some(redis) = &redis_clone {
+                    if let Some(ttl) = redis_ttl {
+                        let mut conn = redis.lock().await;
+                        let cache_key = format!("doc:{}", doc_name_clone);
+                        if let Err(e) = conn
+                            .set_ex::<_, _, String>(&cache_key, update.as_slice(), ttl)
+                            .await
+                        {
+                            tracing::error!("Failed to update Redis cache: {}", e);
+                        }
+                    }
+                }
             }
-        }
+        });
 
         let mut conn = Self::with_protocol(awareness, sink, stream, DefaultProtocol);
         conn._storage_sub = StorageSubscription::new(Some(storage_sub));
+        conn.redis = redis;
+        conn
+    }
+
+    /// Creates a new connection with Redis cache only
+    fn with_redis(
+        awareness: Arc<RwLock<Awareness>>,
+        sink: Sink,
+        stream: Stream,
+        redis: Arc<Mutex<RedisConnection>>,
+    ) -> Self {
+        let mut conn = Self::with_protocol(awareness, sink, stream, DefaultProtocol);
+        conn.redis = Some(redis);
         conn
     }
 
@@ -242,6 +321,7 @@ where
             inbox,
             _stream: PhantomData::default(),
             _storage_sub: StorageSubscription::default(),
+            redis: None,
         }
     }
 
