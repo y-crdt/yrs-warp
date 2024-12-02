@@ -179,8 +179,18 @@ where
         {
             let awareness = awareness.write().await;
             let mut txn = awareness.doc().transact_mut();
-            if let Err(e) = store.load_doc(&doc_name, &mut txn).await {
-                tracing::error!("Failed to load document state: {}", e);
+            tracing::info!("Attempting to load document '{}' from storage", &doc_name);
+            match store.load_doc(&doc_name, &mut txn).await {
+                Ok(_) => {
+                    tracing::info!("Successfully loaded document '{}' from storage", &doc_name);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to load document '{}' from storage: {}",
+                        &doc_name,
+                        e
+                    );
+                }
             }
         }
 
@@ -206,7 +216,19 @@ where
         // Handle updates using spawn_local instead of spawn
         tokio::spawn(async move {
             while let Some(update) = rx.recv().await {
+                tracing::debug!(
+                    "Received update for doc '{}', size: {} bytes",
+                    doc_name_clone,
+                    update.len()
+                );
+
                 // Store in persistent storage
+                tracing::info!(
+                    "Attempting to store update for doc '{}', size: {} bytes",
+                    doc_name_clone,
+                    update.len()
+                );
+
                 match store_clone
                     .push_update(doc_name_clone.as_str(), &update)
                     .await
@@ -219,7 +241,12 @@ where
                         );
                     }
                     Err(e) => {
-                        tracing::error!("Failed to store update: {}", e);
+                        tracing::error!(
+                            "Failed to store update for doc '{}': {}",
+                            doc_name_clone,
+                            e
+                        );
+                        // 可以考虑添加重试逻辑
                     }
                 }
 
@@ -228,6 +255,12 @@ where
                     if let Some(ttl) = redis_ttl {
                         let mut conn = redis.lock().await;
                         let cache_key = format!("doc:{}", doc_name_clone);
+                        tracing::info!(
+                            "Attempting to update Redis cache for key '{}', size: {} bytes",
+                            cache_key,
+                            update.len()
+                        );
+
                         match conn
                             .set_ex::<_, _, String>(
                                 &cache_key,
@@ -244,7 +277,11 @@ where
                                 );
                             }
                             Err(e) => {
-                                tracing::error!("Failed to update Redis cache: {}", e);
+                                tracing::error!(
+                                    "Failed to update Redis cache for key '{}': {}",
+                                    cache_key,
+                                    e
+                                );
                             }
                         }
                     }

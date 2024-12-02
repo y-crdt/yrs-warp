@@ -1,40 +1,47 @@
-// use warp::ws::{WebSocket, Ws};
-// use warp::{Filter, Rejection, Reply};
-// use yrs_warp::signaling::{signaling_conn, SignalingService};
+use axum::{
+    extract::ws::{WebSocket, WebSocketUpgrade},
+    response::Response,
+    routing::get,
+    Router,
+};
+use tower_http::services::ServeDir;
+use yrs_warp::signaling::{signaling_conn, SignalingService};
 
-// const STATIC_FILES_DIR: &str = "examples/webrtc-signaling-server/frontend/dist";
+const STATIC_FILES_DIR: &str = "examples/webrtc-signaling-server/frontend/dist";
 
-// #[tokio::main]
-// async fn main() {
-//     // 初始化日志系统
-//     env_logger::init();
+#[tokio::main]
+async fn main() {
+    // Initialize tracing subscriber
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
 
-//     let signaling = SignalingService::new();
+    let signaling = SignalingService::new();
+    tracing::info!("SignalingService initialized");
 
-//     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
+    let app = Router::new()
+        .route("/signaling", get(ws_handler))
+        .nest_service("/", ServeDir::new(STATIC_FILES_DIR))
+        .with_state(signaling);
 
-//     let ws = warp::path("signaling")
-//         .and(warp::ws())
-//         .and(warp::any().map(move || signaling.clone()))
-//         .and_then(ws_handler);
+    tracing::info!("Starting server on 0.0.0.0:8000");
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
 
-//     let routes = ws.or(static_files);
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    axum::extract::State(svc): axum::extract::State<SignalingService>,
+) -> Response {
+    ws.on_upgrade(move |socket| peer(socket, svc))
+}
 
-//     warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
-// }
-
-// async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejection> {
-//     Ok(ws.on_upgrade(move |socket| peer(socket, svc)))
-// }
-
-// async fn peer(ws: WebSocket, svc: SignalingService) {
-//     println!("new incoming signaling connection");
-//     match signaling_conn(ws, svc).await {
-//         Ok(_) => println!("signaling connection stopped"),
-//         Err(e) => eprintln!("signaling connection failed: {}", e),
-//     }
-// }
-
-fn main() {
-    println!("Hello, world!");
+async fn peer(ws: WebSocket, svc: SignalingService) {
+    tracing::info!("New incoming signaling connection");
+    match signaling_conn(ws, svc).await {
+        Ok(_) => tracing::info!("Signaling connection stopped"),
+        Err(e) => tracing::error!("Signaling connection failed: {}", e),
+    }
 }

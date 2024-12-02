@@ -96,7 +96,7 @@ async fn main() {
     tracing::info!("Broadcast group initialized");
 
     let app = Router::new()
-        .route("/my-room", get(ws_handler))
+        .route("/main", get(ws_handler))
         .nest_service("/", ServeDir::new(STATIC_FILES_DIR))
         .with_state(bcast);
 
