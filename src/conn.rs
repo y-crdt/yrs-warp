@@ -17,8 +17,8 @@ use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::{Transact, Update};
 
 use crate::storage::kv::DocOps;
-use crate::storage::lmdb::LmdbStore;
-use redis::aio::Connection as RedisConnection;
+use crate::storage::sqlite::SqliteStore;
+use redis::aio::MultiplexedConnection as RedisConnection;
 use redis::AsyncCommands;
 
 /// Connection configuration options
@@ -138,7 +138,7 @@ where
         awareness: Arc<RwLock<Awareness>>,
         sink: Sink,
         stream: Stream,
-        store: Arc<LmdbStore<'static>>,
+        store: Arc<SqliteStore>,
         config: ConnectionConfig,
     ) -> Self {
         if !config.storage_enabled {
@@ -157,7 +157,7 @@ where
             let client =
                 redis::Client::open(redis_config.url).expect("Failed to create Redis client");
             let conn = client
-                .get_async_connection()
+                .get_multiplexed_async_connection()
                 .await
                 .expect("Failed to connect to Redis");
             Some(Arc::new(Mutex::new(conn)))
@@ -214,20 +214,27 @@ where
         };
 
         // Handle updates using spawn_local instead of spawn
-        tokio::task::spawn_local(async move {
+        tokio::spawn(async move {
             while let Some(update) = rx.recv().await {
                 // Store in persistent storage
-                if let Err(e) = store_clone.push_update(&doc_name_clone, &update).await {
+                if let Err(e) = store_clone
+                    .push_update(doc_name_clone.as_str(), &update)
+                    .await
+                {
                     tracing::error!("Failed to store update: {}", e);
                 }
 
                 // Update Redis cache if enabled
-                if let Some(redis) = &redis_clone {
+                if let Some(redis) = redis_clone.clone() {
                     if let Some(ttl) = redis_ttl {
                         let mut conn = redis.lock().await;
                         let cache_key = format!("doc:{}", doc_name_clone);
                         if let Err(e) = conn
-                            .set_ex::<_, _, String>(&cache_key, update.as_slice(), ttl)
+                            .set_ex::<_, _, String>(
+                                &cache_key,
+                                update.as_slice(),
+                                ttl.try_into().unwrap(),
+                            )
                             .await
                         {
                             tracing::error!("Failed to update Redis cache: {}", e);

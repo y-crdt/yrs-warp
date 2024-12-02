@@ -50,15 +50,14 @@ use yrs::{Doc, ReadTxn, StateVector, Transact, TransactionMut, Update};
 
 /// A trait to be implemented by the specific key-value store transaction equivalent in order to
 /// auto-implement features provided by [DocOps] trait.
-pub trait KVStore<'a> {
+pub trait KVStore: Send + Sync {
     /// Error type returned from the implementation.
     type Error: std::error::Error + Send + Sync + 'static;
     /// Cursor type used to iterate over the ordered range of key-value entries.
     type Cursor: Iterator<Item = Self::Entry>;
     /// Entry type returned by cursor.
     type Entry: KVEntry;
-    /// Type returned from the implementation. Different key-value stores have different
-    /// abstractions over the binary data they use.
+    /// Type returned from the implementation.
     type Return: AsRef<[u8]>;
 
     /// Return a value stored under given `key` or `None` if key was not found.
@@ -94,9 +93,9 @@ pub trait KVEntry {
 }
 
 /// Trait used to automatically implement core operations over the Yrs document.
-pub trait DocOps<'a>: KVStore<'a> + Sized
+pub trait DocOps<'a>: KVStore + Sized
 where
-    Error: From<<Self as KVStore<'a>>::Error>,
+    Error: From<<Self as KVStore>::Error>,
 {
     /// Inserts or updates a document given it's read transaction and name. lib0 v1 encoding is
     /// used for storing the document.
@@ -358,7 +357,7 @@ where
 
 async fn get_oid<'a, DB: DocOps<'a> + ?Sized>(db: &DB, name: &[u8]) -> Result<Option<OID>, Error>
 where
-    Error: From<<DB as KVStore<'a>>::Error>,
+    Error: From<<DB as KVStore>::Error>,
 {
     let key = key_oid(name);
     let value = db.get(&key).await?;
@@ -373,7 +372,7 @@ where
 
 async fn get_or_create_oid<'a, DB: DocOps<'a> + ?Sized>(db: &DB, name: &[u8]) -> Result<OID, Error>
 where
-    Error: From<<DB as KVStore<'a>>::Error>,
+    Error: From<<DB as KVStore>::Error>,
 {
     if let Some(oid) = get_oid(db, name).await? {
         Ok(oid)
@@ -398,7 +397,7 @@ async fn load_doc<'doc, 'a, DB: DocOps<'a> + ?Sized>(
     txn: &mut TransactionMut<'doc>,
 ) -> Result<u32, Error>
 where
-    Error: From<<DB as KVStore<'a>>::Error>,
+    Error: From<<DB as KVStore>::Error>,
 {
     let mut found = false;
     {
@@ -429,7 +428,7 @@ where
 
 async fn delete_updates<'a, DB: DocOps<'a> + ?Sized>(db: &DB, oid: OID) -> Result<(), Error>
 where
-    Error: From<<DB as KVStore<'a>>::Error>,
+    Error: From<<DB as KVStore>::Error>,
 {
     let start = key_update(oid, 0);
     let end = key_update(oid, u32::MAX);
@@ -443,7 +442,7 @@ async fn flush_doc<'a, DB: DocOps<'a> + ?Sized>(
     options: yrs::Options,
 ) -> Result<Option<Doc>, Error>
 where
-    Error: From<<DB as KVStore<'a>>::Error>,
+    Error: From<<DB as KVStore>::Error>,
 {
     let doc = Doc::with_options(options);
     let found = load_doc(db, oid, &mut doc.transact_mut()).await?;
@@ -468,7 +467,7 @@ async fn insert_inner_v1<'a, DB: DocOps<'a> + ?Sized>(
     doc_sv_v1: &[u8],
 ) -> Result<(), Error>
 where
-    error::Error: From<<DB as KVStore<'a>>::Error>,
+    error::Error: From<<DB as KVStore>::Error>,
 {
     let key_doc = key_doc(oid);
     let key_sv = key_state_vector(oid);

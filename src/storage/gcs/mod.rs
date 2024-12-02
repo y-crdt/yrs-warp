@@ -54,7 +54,7 @@ impl GcsStore {
 
 impl<'db> DocOps<'db> for GcsStore {}
 
-impl<'db> KVStore<'db> for GcsStore {
+impl KVStore for GcsStore {
     type Error = GcsError;
     type Cursor = GcsRange;
     type Entry = GcsEntry;
