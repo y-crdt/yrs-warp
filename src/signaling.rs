@@ -1,3 +1,7 @@
+use axum::{
+    extract::ws::{Message, WebSocket},
+    response::Response,
+};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -5,45 +9,23 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::Duration;
+use thiserror::Error;
 use tokio::select;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::interval;
-use warp::ws::{Message, WebSocket};
-use warp::Error;
+
+#[derive(Debug, Error)]
+pub enum SignalingError {
+    #[error("websocket error: {0}")]
+    WebSocket(#[from] axum::Error),
+    #[error("other error: {0}")]
+    Other(#[from] Box<dyn std::error::Error + Send + Sync>),
+}
 
 const PING_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Signaling service is used by y-webrtc protocol in order to exchange WebRTC offerings between
 /// clients subscribing to particular rooms.
-///
-/// # Example
-///
-/// ```rust
-/// use warp::{Filter, Rejection, Reply};
-/// use warp::ws::{Ws, WebSocket};
-/// use yrs_warp::signaling::{SignalingService, signaling_conn};
-///
-/// fn main() {
-///   let signaling = SignalingService::new();
-///   let ws = warp::path("signaling")
-///       .and(warp::ws())
-///       .and(warp::any().map(move || signaling.clone()))
-///       .and_then(ws_handler);
-///
-///   //warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
-/// }
-///
-/// async fn ws_handler(ws: Ws, svc: SignalingService) -> Result<impl Reply, Rejection> {
-///   Ok(ws.on_upgrade(move |socket| peer(socket, svc)))
-/// }
-///
-/// async fn peer(ws: WebSocket, svc: SignalingService) {
-///   match signaling_conn(ws, svc).await {
-///     Ok(_) => println!("signaling connection stopped"),
-///     Err(e) => eprintln!("signaling connection failed: {}", e),
-///   }
-/// }
-/// ```
 #[derive(Debug, Clone)]
 pub struct SignalingService(Topics);
 
@@ -52,7 +34,7 @@ impl SignalingService {
         SignalingService(Arc::new(RwLock::new(Default::default())))
     }
 
-    pub async fn publish(&self, topic: &str, msg: Message) -> Result<(), Error> {
+    pub async fn publish(&self, topic: &str, msg: Message) -> Result<(), SignalingError> {
         let mut failed = Vec::new();
         {
             let topics = self.0.read().await;
@@ -78,7 +60,7 @@ impl SignalingService {
         Ok(())
     }
 
-    pub async fn close_topic(&self, topic: &str) -> Result<(), Error> {
+    pub async fn close_topic(&self, topic: &str) -> Result<(), SignalingError> {
         let mut topics = self.0.write().await;
         if let Some(subs) = topics.remove(topic) {
             for sub in subs {
@@ -90,7 +72,7 @@ impl SignalingService {
         Ok(())
     }
 
-    pub async fn close(self) -> Result<(), Error> {
+    pub async fn close(self) -> Result<(), SignalingError> {
         let mut topics = self.0.write_owned().await;
         let mut all_conns = HashSet::new();
         for (_, subs) in topics.drain() {
@@ -125,19 +107,19 @@ impl WsSink {
         WsSink(Arc::new(Mutex::new(sink)))
     }
 
-    async fn try_send(&self, msg: Message) -> Result<(), Error> {
+    async fn try_send(&self, msg: Message) -> Result<(), SignalingError> {
         let mut sink = self.0.lock().await;
         if let Err(e) = sink.send(msg).await {
             sink.close().await?;
-            Err(e)
+            Err(SignalingError::WebSocket(e))
         } else {
             Ok(())
         }
     }
 
-    async fn close(&self) -> Result<(), Error> {
+    async fn close(&self) -> Result<(), SignalingError> {
         let mut sink = self.0.lock().await;
-        sink.close().await
+        sink.close().await.map_err(SignalingError::WebSocket)
     }
 }
 
@@ -158,7 +140,10 @@ impl Eq for WsSink {}
 
 /// Handle incoming signaling connection - it's a websocket connection used by y-webrtc protocol
 /// to exchange offering metadata between y-webrtc peers. It also manages topic/room access.
-pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<(), Error> {
+pub async fn signaling_conn(
+    ws: WebSocket,
+    service: SignalingService,
+) -> Result<(), SignalingError> {
     let mut topics: Topics = service.0;
     let (sink, mut stream) = ws.split();
     let ws = WsSink::new(sink);
@@ -173,7 +158,7 @@ pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<
                     return Ok(());
                 } else {
                     state.pong_received = false;
-                    if let Err(e) = ws.try_send(Message::ping(Vec::default())).await {
+                    if let Err(e) = ws.try_send(Message::Ping(Vec::default())).await {
                         ws.close().await?;
                         return Err(e);
                     }
@@ -187,7 +172,7 @@ pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<
                     },
                     Some(Err(e)) => {
                         ws.close().await?;
-                        return Err(e);
+                        return Err(SignalingError::WebSocket(e));
                     },
                     Some(Ok(msg)) => {
                         process_msg(msg, &ws, &mut state, &mut topics).await?;
@@ -206,10 +191,10 @@ async fn process_msg(
     ws: &WsSink,
     state: &mut ConnState,
     topics: &mut Topics,
-) -> Result<(), Error> {
-    if msg.is_text() {
-        let json = msg.to_str().unwrap();
-        let msg = serde_json::from_str(json).unwrap();
+) -> Result<(), SignalingError> {
+    if matches!(msg, Message::Text(_)) {
+        let text = msg.into_text().unwrap();
+        let msg = serde_json::from_str(&text).unwrap();
         match msg {
             Signal::Subscribe {
                 topics: topic_names,
@@ -251,14 +236,10 @@ async fn process_msg(
                     let topics = topics.read().await;
                     if let Some(receivers) = topics.get(topic) {
                         let client_count = receivers.len();
-                        tracing::trace!(
-                            "publishing on {client_count} clients at '{topic}': {json}"
-                        );
+                        tracing::trace!("publishing on {client_count} clients at '{topic}'");
                         for receiver in receivers.iter() {
-                            if let Err(e) = receiver.try_send(Message::text(json)).await {
-                                tracing::info!(
-                                    "failed to publish message {json} on '{topic}': {e}"
-                                );
+                            if let Err(e) = receiver.try_send(Message::Text(text.clone())).await {
+                                tracing::info!("failed to publish message on '{topic}': {e}");
                                 failed.push(receiver.clone());
                             }
                         }
@@ -274,13 +255,13 @@ async fn process_msg(
                 }
             }
             Signal::Ping => {
-                ws.try_send(Message::text(PONG_MSG)).await?;
+                ws.try_send(Message::Text(PONG_MSG.to_string())).await?;
             }
             Signal::Pong => {
-                ws.try_send(Message::text(PING_MSG)).await?;
+                ws.try_send(Message::Text(PING_MSG.to_string())).await?;
             }
         }
-    } else if msg.is_close() {
+    } else if matches!(msg, Message::Close(_)) {
         let mut topics = topics.write().await;
         for topic in state.subscribed_topics.drain() {
             if let Some(subs) = topics.get_mut(&topic) {
@@ -291,8 +272,8 @@ async fn process_msg(
             }
         }
         state.closed = true;
-    } else if msg.is_ping() {
-        ws.try_send(Message::ping(Vec::default())).await?;
+    } else if matches!(msg, Message::Ping(_)) {
+        ws.try_send(Message::Ping(Vec::default())).await?;
     }
     Ok(())
 }

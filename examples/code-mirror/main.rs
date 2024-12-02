@@ -1,8 +1,13 @@
+use axum::{
+    extract::ws::{WebSocket, WebSocketUpgrade},
+    response::Response,
+    routing::get,
+    Router,
+};
 use futures_util::StreamExt;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use warp::ws::{WebSocket, Ws};
-use warp::{Filter, Rejection, Reply};
+use tower_http::services::ServeDir;
 use yrs::sync::Awareness;
 use yrs::{Doc, Text, Transact};
 use yrs_warp::broadcast::BroadcastGroup;
@@ -61,7 +66,6 @@ async fn main() {
             let store = store_clone.clone();
             let update = e.update.clone();
 
-            // Create a new blocking task to handle the update
             tokio::spawn(async move {
                 tracing::debug!("Received document update of {} bytes", update.len());
 
@@ -91,21 +95,21 @@ async fn main() {
     let bcast = Arc::new(BroadcastGroup::new(awareness.clone(), 32).await);
     tracing::info!("Broadcast group initialized");
 
-    let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
-
-    let ws = warp::path("my-room")
-        .and(warp::ws())
-        .and(warp::any().map(move || bcast.clone()))
-        .and_then(ws_handler);
-
-    let routes = ws.or(static_files);
+    let app = Router::new()
+        .route("/my-room", get(ws_handler))
+        .nest_service("/", ServeDir::new(STATIC_FILES_DIR))
+        .with_state(bcast);
 
     tracing::info!("Starting server on 0.0.0.0:8000");
-    warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
-async fn ws_handler(ws: Ws, bcast: Arc<BroadcastGroup>) -> Result<impl Reply, Rejection> {
-    Ok(ws.on_upgrade(move |socket| peer(socket, bcast)))
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    axum::extract::State(bcast): axum::extract::State<Arc<BroadcastGroup>>,
+) -> Response {
+    ws.on_upgrade(|socket| peer(socket, bcast))
 }
 
 async fn peer(ws: WebSocket, bcast: Arc<BroadcastGroup>) {
