@@ -60,34 +60,6 @@ async fn main() {
             }
         }
 
-        // Set up storage subscription for document updates
-        let store_clone = store.clone();
-        let _sub = doc.observe_update_v1(move |_, e| {
-            let store = store_clone.clone();
-            let update = e.update.clone();
-
-            tokio::spawn(async move {
-                tracing::debug!("Received document update of {} bytes", update.len());
-
-                match store.push_update(DOC_NAME, &update).await {
-                    Ok(_) => {
-                        tracing::info!(
-                            "Successfully stored update for document '{}', size: {} bytes",
-                            DOC_NAME,
-                            update.len()
-                        );
-                    }
-                    Err(e) => {
-                        tracing::error!(
-                            "Failed to store update for document '{}': {}",
-                            DOC_NAME,
-                            e
-                        );
-                    }
-                }
-            });
-        });
-
         Arc::new(RwLock::new(Awareness::new(doc)))
     };
 
