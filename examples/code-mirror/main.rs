@@ -10,12 +10,12 @@ use tokio::sync::RwLock;
 use tower_http::services::ServeDir;
 use yrs::sync::Awareness;
 use yrs::{Doc, Text, Transact};
-use yrs_warp::broadcast::BroadcastGroup;
 use yrs_warp::conn::Connection;
 use yrs_warp::storage::kv::DocOps;
 use yrs_warp::storage::sqlite::SqliteStore;
 use yrs_warp::ws::{WarpSink, WarpStream};
 use yrs_warp::AwarenessRef;
+use yrs_warp::{broadcast::BroadcastGroup, conn::ConnectionConfig};
 
 const STATIC_FILES_DIR: &str = "examples/code-mirror/frontend/dist";
 const DB_PATH: &str = "examples/code-mirror/yrs.db";
@@ -98,7 +98,7 @@ async fn main() {
     let app = Router::new()
         .route("/main", get(ws_handler))
         .nest_service("/", ServeDir::new(STATIC_FILES_DIR))
-        .with_state(bcast);
+        .with_state((bcast, store));
 
     tracing::info!("Starting server on 0.0.0.0:8000");
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8000").await.unwrap();
@@ -107,17 +107,32 @@ async fn main() {
 
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    axum::extract::State(bcast): axum::extract::State<Arc<BroadcastGroup>>,
+    axum::extract::State((bcast, store)): axum::extract::State<(
+        Arc<BroadcastGroup>,
+        Arc<SqliteStore>,
+    )>,
 ) -> Response {
-    ws.on_upgrade(|socket| peer(socket, bcast))
+    ws.on_upgrade(move |socket| peer(socket, bcast, store))
 }
 
-async fn peer(ws: WebSocket, bcast: Arc<BroadcastGroup>) {
+async fn peer(ws: WebSocket, bcast: Arc<BroadcastGroup>, store: Arc<SqliteStore>) {
     let (ws_sink, ws_stream) = ws.split();
     let sink = WarpSink::from(ws_sink);
     let stream = WarpStream::from(ws_stream);
 
-    let conn = Connection::new(bcast.awareness().clone(), sink, stream);
+    let conn = Connection::with_storage(
+        bcast.awareness().clone(),
+        sink,
+        stream,
+        store,
+        ConnectionConfig {
+            storage_enabled: true,
+            doc_name: Some(DOC_NAME.to_string()),
+            redis_config: None,
+        },
+    )
+    .await;
+
     tracing::debug!("New peer connection established");
 
     match conn.await {

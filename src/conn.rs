@@ -179,14 +179,20 @@ where
         {
             let awareness = awareness.write().await;
             let mut txn = awareness.doc().transact_mut();
-            tracing::info!("Attempting to load document '{}' from storage", &doc_name);
+            tracing::info!(
+                "Attempting to load document '{}' from persistent storage",
+                &doc_name
+            );
             match store.load_doc(&doc_name, &mut txn).await {
                 Ok(_) => {
-                    tracing::info!("Successfully loaded document '{}' from storage", &doc_name);
+                    tracing::info!(
+                        "Successfully loaded document '{}' from persistent storage",
+                        &doc_name
+                    );
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to load document '{}' from storage: {}",
+                        "Failed to load document '{}' from persistent storage: {}",
                         &doc_name,
                         e
                     );
