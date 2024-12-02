@@ -14,6 +14,7 @@ use google_cloud_storage::{
     http::objects::Object,
 };
 use thiserror::Error;
+use tracing::{debug, info};
 
 #[derive(Debug, Error)]
 pub enum GcsError {
@@ -86,6 +87,9 @@ impl KVStore for GcsStore {
             bucket: self.bucket.clone(),
             ..Default::default()
         };
+
+        info!("Writing to GCS storage - key: {:?}", key);
+        debug!("Value length: {} bytes", value.len());
 
         self.client
             .upload_object(&request, value.to_vec(), &upload_type)

@@ -64,6 +64,7 @@
 use lmdb_rs::core::{CursorIterator, MdbResult};
 use lmdb_rs::{CursorKeyRangeIter, Database, MdbError, ReadonlyTransaction};
 use std::ops::Deref;
+use log::{debug, info};
 
 pub use super::kv as store;
 use super::kv::error::Error;

@@ -18,8 +18,16 @@ const DOC_NAME: &str = "codemirror";
 
 #[tokio::main]
 async fn main() {
+    // Initialize tracing subscriber with more detailed logging
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_file(true)
+        .with_line_number(true)
+        .init();
+
     // Initialize SQLite store
     let store = Arc::new(SqliteStore::new(DB_PATH).expect("Failed to open SQLite database"));
+    tracing::info!("SQLite store initialized at: {}", DB_PATH);
 
     // We're using a single static document shared among all the peers.
     let awareness: AwarenessRef = {
@@ -28,16 +36,22 @@ async fn main() {
         // Load document state from storage
         {
             let mut txn = doc.transact_mut();
-            if let Err(e) = store.load_doc(DOC_NAME, &mut txn).await {
-                tracing::warn!("No existing document found or failed to load: {}", e);
-                // Initialize new document if no existing one found
-                let txt = doc.get_or_insert_text("codemirror");
-                txt.push(
-                    &mut txn,
-                    r#"function hello() {
+            match store.load_doc(DOC_NAME, &mut txn).await {
+                Ok(_) => {
+                    tracing::info!("Successfully loaded existing document from storage");
+                }
+                Err(e) => {
+                    tracing::warn!("No existing document found or failed to load: {}", e);
+                    // Initialize new document if no existing one found
+                    let txt = doc.get_or_insert_text("codemirror");
+                    txt.push(
+                        &mut txn,
+                        r#"function hello() {
   console.log('hello world');
 }"#,
-                );
+                    );
+                    tracing::info!("Initialized new document with default content");
+                }
             }
         }
 
@@ -46,9 +60,26 @@ async fn main() {
         let _sub = doc.observe_update_v1(move |_, e| {
             let store = store_clone.clone();
             let update = e.update.clone();
+
+            // Create a new blocking task to handle the update
             tokio::spawn(async move {
-                if let Err(e) = store.push_update(DOC_NAME, &update).await {
-                    tracing::error!("Failed to store update: {}", e);
+                tracing::debug!("Received document update of {} bytes", update.len());
+
+                match store.push_update(DOC_NAME, &update).await {
+                    Ok(_) => {
+                        tracing::info!(
+                            "Successfully stored update for document '{}', size: {} bytes",
+                            DOC_NAME,
+                            update.len()
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to store update for document '{}': {}",
+                            DOC_NAME,
+                            e
+                        );
+                    }
                 }
             });
         });
@@ -58,6 +89,7 @@ async fn main() {
 
     // open a broadcast group that listens to awareness and document updates
     let bcast = Arc::new(BroadcastGroup::new(awareness.clone(), 32).await);
+    tracing::info!("Broadcast group initialized");
 
     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
 
@@ -68,6 +100,7 @@ async fn main() {
 
     let routes = ws.or(static_files);
 
+    tracing::info!("Starting server on 0.0.0.0:8000");
     warp::serve(routes).run(([0, 0, 0, 0], 8000)).await;
 }
 
@@ -81,9 +114,10 @@ async fn peer(ws: WebSocket, bcast: Arc<BroadcastGroup>) {
     let stream = WarpStream::from(ws_stream);
 
     let conn = Connection::new(bcast.awareness().clone(), sink, stream);
+    tracing::debug!("New peer connection established");
 
     match conn.await {
-        Ok(_) => println!("broadcasting for channel finished successfully"),
-        Err(e) => eprintln!("broadcasting for channel finished abruptly: {}", e),
+        Ok(_) => tracing::info!("Peer connection finished successfully"),
+        Err(e) => tracing::error!("Peer connection finished with error: {}", e),
     }
 }
