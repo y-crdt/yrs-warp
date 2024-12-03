@@ -198,8 +198,8 @@ pub async fn signaling_conn(ws: WebSocket, service: SignalingService) -> Result<
     }
 }
 
-const PING_MSG: &'static str = r#"{"type":"ping"}"#;
-const PONG_MSG: &'static str = r#"{"type":"pong"}"#;
+const PING_MSG: &str = r#"{"type":"ping"}"#;
+const PONG_MSG: &str = r#"{"type":"pong"}"#;
 
 async fn process_msg(
     msg: Message,
