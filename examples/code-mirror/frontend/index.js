@@ -46,3 +46,19 @@ const state = EditorState.create({
 })
 
 const view = new EditorView({ state, parent: document.querySelector('#editor') })
+
+// toggle connection by clicking on connect-btn
+const toggleButton = document.getElementById('y-connect-btn')
+let connected = true
+
+toggleButton.addEventListener('click', () => {
+    if (connected) {
+        provider.disconnect()
+        connected = false
+        toggleButton.innerText = 'Reconnect'
+    } else {
+        provider.connect()
+        connected = true
+        toggleButton.innerText = 'Disconnect'
+    }
+})
