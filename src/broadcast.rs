@@ -168,7 +168,18 @@ impl BroadcastGroup {
         };
         let stream_task = {
             let awareness = self.awareness().clone();
+
             tokio::spawn(async move {
+                let payload = {
+                    let mut encoder = EncoderV1::new();
+                    let awareness = awareness.read().await;
+                    protocol.start(&awareness, &mut encoder)?;
+                    encoder.to_vec()
+                };
+                if !payload.is_empty() {
+                    let mut s = sink.lock().await;
+                    s.send(payload).await.map_err(|e| Error::Other(e.into()))?;
+                }
                 while let Some(res) = stream.next().await {
                     let msg = Message::decode_v1(&res.map_err(|e| Error::Other(Box::new(e)))?)?;
                     let reply = Self::handle_msg(&protocol, &awareness, msg).await?;
