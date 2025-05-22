@@ -59,7 +59,7 @@ impl BroadcastGroup {
         };
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = sender.clone();
-        let awareness_sub = lock.on_update(move |e| {
+        let awareness_sub = lock.on_update(move |_a, e, _| {
             let added = e.added();
             let updated = e.updated();
             let removed = e.removed();
