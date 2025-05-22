@@ -337,8 +337,8 @@ mod test {
 
         // check awareness update propagation
         {
-            let mut a = awareness.write().await;
-            a.set_local_state(r#"{"key":"value"}"#)
+            let a = awareness.write().await;
+            a.set_local_state(r#"{"key":"value"}"#).unwrap();
         }
 
         let msg = client_receiver.next().await;
@@ -350,7 +350,7 @@ mod test {
                     1,
                     AwarenessUpdateEntry {
                         clock: 1,
-                        json: r#"{"key":"value"}"#.to_string(),
+                        json: r#"{"key":"value"}"#.to_string().into(),
                     },
                 )]),
             }))
