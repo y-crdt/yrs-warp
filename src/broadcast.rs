@@ -338,11 +338,12 @@ mod test {
         // check awareness update propagation
         {
             let a = awareness.write().await;
-            a.set_local_state(r#"{"key":"value"}"#).unwrap();
+            a.set_local_state(serde_json::json!({"key":"value"})).unwrap();
         }
 
         let msg = client_receiver.next().await;
         let msg = msg.map(|x| Message::decode_v1(&x.unwrap()).unwrap());
+
         assert_eq!(
             msg,
             Some(Message::Awareness(AwarenessUpdate {
@@ -350,7 +351,7 @@ mod test {
                     1,
                     AwarenessUpdateEntry {
                         clock: 1,
-                        json: r#"{"key":"value"}"#.to_string().into(),
+                        json: Arc::from(r#"{"key":"value"}"#),
                     },
                 )]),
             }))
