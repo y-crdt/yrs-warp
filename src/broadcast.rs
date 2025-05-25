@@ -8,8 +8,8 @@ use tokio::sync::broadcast::{channel, Receiver, Sender};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 use yrs::encoding::write::Write;
-use yrs::sync::protocol::{MSG_SYNC, MSG_SYNC_UPDATE};
-use yrs::sync::{DefaultProtocol, Error, Message, Protocol, SyncMessage};
+use yrs::sync::protocol::{AsyncProtocol, MSG_SYNC, MSG_SYNC_UPDATE};
+use yrs::sync::{DefaultProtocol, Error, Message, SyncMessage};
 use yrs::updates::decoder::Decode;
 use yrs::updates::encoder::{Encode, Encoder, EncoderV1};
 use yrs::Update;
@@ -150,7 +150,7 @@ impl BroadcastGroup {
         Stream: StreamExt<Item = Result<Vec<u8>, E>> + Send + Sync + Unpin + 'static,
         <Sink as futures_util::Sink<Vec<u8>>>::Error: std::error::Error + Send + Sync,
         E: std::error::Error + Send + Sync + 'static,
-        P: Protocol + Send + Sync + 'static,
+        P: AsyncProtocol + Send + Sync + 'static,
     {
         let sink_task = {
             let sink = sink.clone();
@@ -192,7 +192,7 @@ impl BroadcastGroup {
         }
     }
 
-    async fn handle_msg<P: Protocol>(
+    async fn handle_msg<P: AsyncProtocol + Send + Sync>(
         protocol: &P,
         awareness: &AwarenessRef,
         msg: Message,
@@ -201,34 +201,34 @@ impl BroadcastGroup {
             Message::Sync(msg) => match msg {
                 SyncMessage::SyncStep1(state_vector) => {
                     let awareness = awareness.read().await;
-                    protocol.handle_sync_step1(&*awareness, state_vector)
+                    protocol.handle_sync_step1(&*awareness, state_vector).await
                 }
                 SyncMessage::SyncStep2(update) => {
                     let mut awareness = awareness.write().await;
                     let update = Update::decode_v1(&update)?;
-                    protocol.handle_sync_step2(&mut *awareness, update)
+                    protocol.handle_sync_step2(&mut *awareness, update).await
                 }
                 SyncMessage::Update(update) => {
                     let mut awareness = awareness.write().await;
                     let update = Update::decode_v1(&update)?;
-                    protocol.handle_sync_step2(&mut *awareness, update)
+                    protocol.handle_sync_step2(&mut *awareness, update).await
                 }
             },
             Message::Auth(deny_reason) => {
                 let awareness = awareness.read().await;
-                protocol.handle_auth(&*awareness, deny_reason)
+                protocol.handle_auth(&*awareness, deny_reason).await
             }
             Message::AwarenessQuery => {
                 let awareness = awareness.read().await;
-                protocol.handle_awareness_query(&*awareness)
+                protocol.handle_awareness_query(&*awareness).await
             }
             Message::Awareness(update) => {
                 let mut awareness = awareness.write().await;
-                protocol.handle_awareness_update(&mut *awareness, update)
+                protocol.handle_awareness_update(&mut *awareness, update).await
             }
             Message::Custom(tag, data) => {
                 let mut awareness = awareness.write().await;
-                protocol.missing_handle(&mut *awareness, tag, data)
+                protocol.missing_handle(&mut *awareness, tag, data).await
             }
         }
     }
