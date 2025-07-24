@@ -32,7 +32,7 @@ async fn main() {
 
     // open a broadcast group that listens to awareness and document updates
     // and has a pending message buffer of up to 32 updates
-    let bcast = Arc::new(BroadcastGroup::new(awareness.clone(), 32).await);
+    let bcast = Arc::new(BroadcastGroup::new(awareness, 32).await);
 
     let static_files = warp::get().and(warp::fs::dir(STATIC_FILES_DIR));
 
