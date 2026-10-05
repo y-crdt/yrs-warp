@@ -164,7 +164,7 @@ impl BroadcastGroup {
             tokio::spawn(async move {
                 let payload = {
                     let mut encoder = EncoderV1::new();
-                    let awareness = awareness.read().await;
+                    let awareness = awareness.clone();
                     protocol.start(&awareness, &mut encoder)?;
                     encoder.to_vec()
                 };
