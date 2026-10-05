@@ -291,8 +291,8 @@ async fn process_msg(
             }
         }
         state.closed = true;
-    } else if msg.is_ping() {
-        ws.try_send(Message::ping(Vec::default())).await?;
+    } else if msg.is_pong() {
+        state.pong_received = true;
     }
     Ok(())
 }
